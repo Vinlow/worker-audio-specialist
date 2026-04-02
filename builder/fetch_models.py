@@ -6,8 +6,6 @@ from faster_whisper.utils import download_model
 # and will be downloaded on first request (with a cold-start penalty).
 whisper_models = [
     "large-v3",
-    "distil-large-v3.5",
-    "turbo",
 ]
 
 for model_name in whisper_models:

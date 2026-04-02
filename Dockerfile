@@ -1,4 +1,4 @@
-# faster-whisper turbo needs cudnnn >= 9
+# faster-whisper turbo needs cudnn >= 9
 # see https://github.com/runpod-workers/worker-faster_whisper/pull/44
 FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
 
@@ -13,34 +13,32 @@ ENV SHELL=/bin/bash
 # Set working directory
 WORKDIR /
 
-# Update and upgrade the system packages
+# Fix stale Ubuntu mirrors in the NVIDIA base image
+RUN sed -i 's|http://archive.ubuntu.com|http://us.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.ubuntu.com|http://us.archive.ubuntu.com|g' /etc/apt/sources.list
+
+# Update and install system packages (combined to reduce layers)
 RUN apt-get update -y && \
     apt-get upgrade -y && \
-    apt-get install --yes --no-install-recommends sudo ca-certificates git wget curl bash libgl1 libx11-6 software-properties-common ffmpeg build-essential -y &&\
-    apt-get autoremove -y && \
-    apt-get clean -y && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Python 3.10
-RUN apt-get update -y && \
-    apt-get install python3.10 python3.10-dev python3.10-venv python3-pip -y --no-install-recommends && \
-    ln -s /usr/bin/python3.10 /usr/bin/python && \
-    rm -f /usr/bin/python3 && \
-    ln -s /usr/bin/python3.10 /usr/bin/python3 && \
+    apt-get install --yes --no-install-recommends \
+        sudo ca-certificates git wget curl bash \
+        libgl1 libx11-6 software-properties-common \
+        ffmpeg build-essential libsndfile1 \
+        python3.10 python3.10-dev python3.10-venv python3-pip && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
     apt-get autoremove -y && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/*
 
 # Install PyTorch with CUDA support (must come before transformers/CLAP)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
-    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # Install Python dependencies
 COPY builder/requirements.txt /requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install huggingface_hub[hf_xet] && \
-    pip install -r /requirements.txt --no-cache-dir
+RUN pip install --no-cache-dir huggingface_hub[hf_xet] && \
+    pip install --no-cache-dir -r /requirements.txt
 
 # Copy and run script to fetch models
 COPY builder/fetch_models.py /fetch_models.py
