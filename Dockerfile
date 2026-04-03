@@ -31,11 +31,10 @@ RUN apt-get update -y && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch CPU-ONLY (saves ~2.3 GB vs CUDA wheels).
-# Whisper uses CTranslate2 for GPU — PyTorch is only needed for CLAP scoring,
-# which runs fine on CPU (small model, short audio windows).
+# Install PyTorch with CUDA (needed for CLAP GPU scoring).
+# No torchaudio — not used anywhere.
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
 
 # Install Python dependencies
 COPY builder/requirements.txt /requirements.txt
