@@ -10,7 +10,6 @@ extended with CLAP scoring for Web2Labs Studio.
 """
 
 import gc
-import os
 import threading
 import numpy as np
 
@@ -19,10 +18,6 @@ from runpod.serverless.utils import rp_cuda
 from faster_whisper import WhisperModel
 from faster_whisper.utils import format_timestamp
 from clap_scorer import ClapScorer
-
-# Network volume model cache
-MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models")
-WHISPER_CACHE = os.path.join(MODEL_DIR, "whisper")
 
 # Define available models (for validation)
 AVAILABLE_MODELS = {
@@ -109,11 +104,8 @@ class Predictor:
                 # Load the requested model
                 print(f"Loading model: {model_name}...")
                 try:
-                    # Check network volume cache first, fall back to HF download
-                    cached_path = os.path.join(WHISPER_CACHE, model_name)
-                    model_path = cached_path if os.path.isdir(cached_path) else model_name
                     loaded_model = WhisperModel(
-                        model_path,
+                        model_name,
                         device="cuda" if rp_cuda.is_available() else "cpu",
                         compute_type="float16" if rp_cuda.is_available() else "int8",
                     )

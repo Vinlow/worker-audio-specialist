@@ -31,28 +31,21 @@ RUN apt-get update -y && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch with CUDA support (must come before transformers/CLAP)
+# Install PyTorch CPU-ONLY (saves ~2.3 GB vs CUDA wheels).
+# Whisper uses CTranslate2 for GPU — PyTorch is only needed for CLAP scoring,
+# which runs fine on CPU (small model, short audio windows).
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 # Install Python dependencies
 COPY builder/requirements.txt /requirements.txt
 RUN pip install --no-cache-dir huggingface_hub[hf_xet] && \
     pip install --no-cache-dir -r /requirements.txt
 
-# Bake in only the turbo model (small, needed for RunPod test).
-# large-v3 and CLAP are loaded from network volume at runtime.
-RUN python -c "\
-from faster_whisper.utils import download_model; \
-import os; \
-os.makedirs('/models/whisper', exist_ok=True); \
-download_model('turbo', cache_dir='/models/whisper'); \
-print('turbo model baked in.')"
-
-# Copy startup script and model fetcher
+# Pre-download all models into the image (no network volume needed)
 COPY builder/fetch_models.py /fetch_models.py
-COPY builder/start.sh /start.sh
-RUN chmod +x /start.sh
+RUN python /fetch_models.py && \
+    rm /fetch_models.py
 
 # Copy handler and other code
 COPY src .
@@ -60,8 +53,5 @@ COPY src .
 # test input that will be used when the container runs outside of runpod
 COPY test_input.json .
 
-# Default model cache — overridden by start.sh when network volume exists
-ENV MODEL_DIR=/models
-
-# Start: ensure models are cached, then run handler
-CMD ["/start.sh"]
+# Set default command
+CMD python -u /rp_handler.py

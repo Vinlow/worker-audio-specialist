@@ -8,17 +8,10 @@ The model is loaded once and cached for subsequent requests.
 Runs on GPU when available, CPU as fallback.
 """
 
-import os
 import threading
 import numpy as np
 
 CLAP_MODEL_ID = "laion/larger_clap_music_and_speech"
-
-# Point HF cache at network volume
-MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models")
-HF_CACHE = os.path.join(MODEL_DIR, "huggingface")
-os.environ.setdefault("HF_HOME", HF_CACHE)
-os.environ.setdefault("TRANSFORMERS_CACHE", HF_CACHE)
 WINDOW_SIZE = 1.0  # Score per 1-second window
 SAMPLE_RATE = 48000
 
@@ -45,13 +38,11 @@ class ClapScorer:
         self.model = ClapModel.from_pretrained(CLAP_MODEL_ID)
         self.model.eval()
 
-        if torch.cuda.is_available():
-            self.model = self.model.to("cuda")
-            self.device = "cuda"
-            print(f"[ClapScorer] Model loaded on GPU ({torch.cuda.get_device_name(0)})")
-        else:
-            self.device = "cpu"
-            print("[ClapScorer] Model loaded on CPU")
+        # CLAP runs on CPU intentionally — keeps PyTorch CUDA out of the
+        # Docker image (~2.3 GB saving). Whisper uses CTranslate2 for GPU.
+        # CPU is fast enough for CLAP: ~100-200ms per 1-second window.
+        self.device = "cpu"
+        print("[ClapScorer] Model loaded on CPU")
 
     def score(self, wav_path, queries):
         """
