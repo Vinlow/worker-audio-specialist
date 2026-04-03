@@ -48,12 +48,19 @@ def run_whisper_job(job):
     '''
     job_input = job['input']
 
+    # Grab clap_queries before validation (rp_validator doesn't handle dict type)
+    raw_clap_queries = job_input.get('clap_queries', None)
+
     with rp_debugger.LineTimer('validation_step'):
         input_validation = validate(job_input, INPUT_VALIDATIONS)
 
         if 'errors' in input_validation:
             return {"error": input_validation['errors']}
         job_input = input_validation['validated_input']
+
+    # Restore clap_queries from raw input (validator may have stripped it)
+    if raw_clap_queries and isinstance(raw_clap_queries, dict):
+        job_input['clap_queries'] = raw_clap_queries
 
     if not job_input.get('audio', False) and not job_input.get('audio_base64', False):
         return {'error': 'Must provide either audio or audio_base64'}

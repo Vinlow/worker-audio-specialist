@@ -104,9 +104,6 @@ INPUT_VALIDATIONS = {
         'required': False,
         'default': False
     },
-    'clap_queries': {
-        'type': dict,
-        'required': False,
-        'default': None
-    },
+    # clap_queries is handled separately in rp_handler.py
+    # (rp_validator doesn't support dict type validation)
 }

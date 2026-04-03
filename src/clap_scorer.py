@@ -116,7 +116,7 @@ class ClapScorer:
             batch_chunks = chunks[batch_start:batch_start + MAX_BATCH_SIZE]
 
             audio_inputs = self.processor(
-                audios=batch_chunks,
+                audio=batch_chunks,
                 sampling_rate=SAMPLE_RATE,
                 return_tensors="pt",
                 padding=True,
