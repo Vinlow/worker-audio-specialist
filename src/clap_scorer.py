@@ -83,7 +83,6 @@ class ClapScorer:
         # Load audio
         waveform, sr = librosa.load(wav_path, sr=SAMPLE_RATE, mono=True)
         duration = len(waveform) / sr
-        print(f"[ClapScorer] Audio loaded: {duration:.1f}s, {len(waveform)} samples")
 
         query_names = list(queries.keys())
         query_texts = list(queries.values())
@@ -93,9 +92,9 @@ class ClapScorer:
         text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
 
         with torch.no_grad():
-            text_embeds = self.model.get_text_features(**text_inputs)
+            text_out = self.model.get_text_features(**text_inputs)
+            text_embeds = text_out if not hasattr(text_out, "pooler_output") else text_out.pooler_output
             text_embeds = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
-        print(f"[ClapScorer] Text embeddings: {text_embeds.shape}")
 
         # Slice audio into 1-second windows
         window_samples = int(WINDOW_SIZE * SAMPLE_RATE)
@@ -110,8 +109,6 @@ class ClapScorer:
                 chunk = np.pad(chunk, (0, window_samples - len(chunk)))
             chunks.append(chunk)
 
-        print(f"[ClapScorer] Processing {len(chunks)} windows in batches of {MAX_BATCH_SIZE}")
-
         # Batch all windows through CLAP in one (or few) forward passes
         all_similarities = []
 
@@ -122,30 +119,28 @@ class ClapScorer:
                 audio=batch_chunks,
                 sampling_rate=SAMPLE_RATE,
                 return_tensors="pt",
+                padding=True,
             )
-            audio_inputs = {k: v.to(self.device) for k, v in audio_inputs.items() if hasattr(v, 'to')}
+            audio_inputs = {k: v.to(self.device) for k, v in audio_inputs.items()}
 
             with torch.no_grad():
-                audio_embeds = self.model.get_audio_features(**audio_inputs)
+                audio_out = self.model.get_audio_features(**audio_inputs)
+                audio_embeds = audio_out if not hasattr(audio_out, "pooler_output") else audio_out.pooler_output
                 audio_embeds = audio_embeds / audio_embeds.norm(dim=-1, keepdim=True)
 
                 # (batch, queries) cosine similarity matrix
                 sims = (audio_embeds @ text_embeds.T).cpu().numpy()
                 all_similarities.append(sims)
 
-            print(f"[ClapScorer] Batch {batch_start // MAX_BATCH_SIZE + 1}: {len(batch_chunks)} windows, audio_embeds={audio_embeds.shape}")
-
         # Concatenate batches and map to per-query score lists
         all_sims = np.concatenate(all_similarities, axis=0)  # (n_windows, n_queries)
 
         scores = {}
         for j, name in enumerate(query_names):
-            # Map cosine similarity [-1, 1] to relevance [0, 1]
+            # Map cosine similarity [-1, 1] → relevance [0, 1]
             raw = all_sims[:, j]
             relevance = np.clip((raw + 1) / 2, 0, 1)
             scores[name] = [round(float(v), 4) for v in relevance]
-
-        print(f"[ClapScorer] Done: {len(chunks)} windows, {len(query_names)} queries")
 
         return {
             "scores": scores,
