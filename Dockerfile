@@ -40,10 +40,19 @@ COPY builder/requirements.txt /requirements.txt
 RUN pip install --no-cache-dir huggingface_hub[hf_xet] && \
     pip install --no-cache-dir -r /requirements.txt
 
-# Copy and run script to fetch models
+# Bake in only the turbo model (small, needed for RunPod test).
+# large-v3 and CLAP are loaded from network volume at runtime.
+RUN python -c "\
+from faster_whisper.utils import download_model; \
+import os; \
+os.makedirs('/models/whisper', exist_ok=True); \
+download_model('turbo', cache_dir='/models/whisper'); \
+print('turbo model baked in.')"
+
+# Copy startup script and model fetcher
 COPY builder/fetch_models.py /fetch_models.py
-RUN python /fetch_models.py && \
-    rm /fetch_models.py
+COPY builder/start.sh /start.sh
+RUN chmod +x /start.sh
 
 # Copy handler and other code
 COPY src .
@@ -51,5 +60,8 @@ COPY src .
 # test input that will be used when the container runs outside of runpod
 COPY test_input.json .
 
-# Set default command
-CMD python -u /rp_handler.py
+# Default model cache — overridden by start.sh when network volume exists
+ENV MODEL_DIR=/models
+
+# Start: ensure models are cached, then run handler
+CMD ["/start.sh"]

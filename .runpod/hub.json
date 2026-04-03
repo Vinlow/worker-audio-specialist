@@ -1,9 +1,9 @@
 {
-  "title": "Faster Whisper + Probability",
-  "description": "Faster-whisper with per-word probability and segment-level confidence (avg_logprob, compression_ratio, no_speech_prob). Pre-bundled with distil-large-v3.5 for zero cold-start latency.",
+  "title": "Audio Specialist (Whisper + CLAP)",
+  "description": "Faster-whisper transcription with per-word probability, plus CLAP audio-text similarity scoring. Models loaded from network volume for fast cold starts.",
   "type": "serverless",
   "category": "audio",
-  "iconUrl": "https://dummyimage.com/100x100/0066ff/fff&text=FW%2B",
+  "iconUrl": "https://dummyimage.com/100x100/0066ff/fff&text=AS",
   "config": {
     "runsOn": "GPU",
     "containerDiskInGb": 25,

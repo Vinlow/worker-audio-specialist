@@ -14,11 +14,6 @@
     "compression_ratio_threshold": 2.4,
     "logprob_threshold": -1,
     "no_speech_threshold": 0.6,
-    "enable_vad": true,
-    "clap_queries": {
-      "speech": "clear confident speaking voice",
-      "music": "background music or orchestral sounds",
-      "applause": "audience clapping or cheering"
-    }
+    "enable_vad": true
   }
 }

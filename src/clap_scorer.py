@@ -8,10 +8,17 @@ The model is loaded once and cached for subsequent requests.
 Runs on GPU when available, CPU as fallback.
 """
 
+import os
 import threading
 import numpy as np
 
 CLAP_MODEL_ID = "laion/larger_clap_music_and_speech"
+
+# Point HF cache at network volume
+MODEL_DIR = os.environ.get("MODEL_DIR", "/runpod-volume/models")
+HF_CACHE = os.path.join(MODEL_DIR, "huggingface")
+os.environ.setdefault("HF_HOME", HF_CACHE)
+os.environ.setdefault("TRANSFORMERS_CACHE", HF_CACHE)
 WINDOW_SIZE = 1.0  # Score per 1-second window
 SAMPLE_RATE = 48000
 
