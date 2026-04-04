@@ -2,7 +2,7 @@
 
 GPU-accelerated audio analysis worker for [Web2Labs Studio](https://www.web2labs.com). Combines **Faster-Whisper** transcription with **CLAP** audio-text similarity scoring in a single RunPod serverless call.
 
-One upload, two signals: transcript + audio understanding.
+One upload, two signals: transcript + audio understanding. v2.
 
 ## What it does
 
