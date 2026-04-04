@@ -48,8 +48,8 @@ def run_whisper_job(job):
     '''
     job_input = job['input']
 
-    # Grab clap_queries before validation (rp_validator doesn't handle dict type)
-    raw_clap_queries = job_input.get('clap_queries', None)
+    # Extract clap_queries before validation — rp_validator chokes on dict types
+    raw_clap_queries = job_input.pop('clap_queries', None)
 
     with rp_debugger.LineTimer('validation_step'):
         input_validation = validate(job_input, INPUT_VALIDATIONS)
@@ -58,7 +58,7 @@ def run_whisper_job(job):
             return {"error": input_validation['errors']}
         job_input = input_validation['validated_input']
 
-    # Restore clap_queries from raw input (validator may have stripped it)
+    # Restore clap_queries after validation
     if raw_clap_queries and isinstance(raw_clap_queries, dict):
         job_input['clap_queries'] = raw_clap_queries
 
