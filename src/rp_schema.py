@@ -57,7 +57,7 @@ INPUT_VALIDATIONS = {
     'length_penalty': {
         'type': float,
         'required': False,
-        'default': 0
+        'default': 1.0
     },
     'suppress_tokens': {
         'type': str,
