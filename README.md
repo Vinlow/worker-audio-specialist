@@ -32,6 +32,7 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 |---|---|---|
 | `audio` | str | URL to audio file |
 | `audio_base64` | str | Base64-encoded audio file |
+| `span_stream` | dict | Holy Grale streaming mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Mutually exclusive with `audio`/`audio_base64`; yields one result per span via `/stream`. |
 | `model` | str | Whisper model. Default: `"base"` |
 | `transcription` | str | Output format: `"plain_text"`, `"formatted_text"`, `"srt"`, `"vtt"`. Default: `"plain_text"` |
 | `translate` | bool | Translate to English. Default: `false` |
@@ -159,6 +160,33 @@ this fires.
 ## Backwards compatibility
 
 Existing callers that don't send `clap_queries` get the same behavior as before — Whisper-only transcription. CLAP is purely additive; `force_align` is opt-in.
+
+### Holy Grale span-stream mode
+
+For Studio's streaming-first pipeline, callers may send a final-tier span-stream
+job instead of a single `audio` URL:
+
+```json
+{
+  "input": {
+    "span_stream": {
+      "mode": "final",
+      "spans": [
+        { "index": 0, "audio": "https://example.com/span_000.wav", "start_sec": 0 },
+        { "index": 1, "audio": "https://example.com/span_001.wav", "start_sec": 120 }
+      ]
+    },
+    "model": "large-v3",
+    "word_timestamps": true,
+    "force_align": true
+  }
+}
+```
+
+The handler yields one normal transcription result per span, with `span_index`
+and `start_sec` added. `return_aggregate_stream` is enabled, so clients can use
+`/stream` for incremental span results while `/run` and `/runsync` can still
+receive the aggregate list.
 
 ## Based on
 
