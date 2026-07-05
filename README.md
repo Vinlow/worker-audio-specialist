@@ -32,7 +32,7 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 |---|---|---|
 | `audio` | str | URL to audio file |
 | `audio_base64` | str | Base64-encoded audio file |
-| `span_stream` | dict | Holy Grale streaming mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Mutually exclusive with `audio`/`audio_base64`; yields one result per span via `/stream`. |
+| `span_stream` | dict | Holy Grale streaming mode. Final mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Draft mode: `{mode:"draft", next_url, poll_ms?, budget_sec?, idle_timeout_sec?}`. Mutually exclusive with `audio`/`audio_base64`; yields results via `/stream`. |
 | `model` | str | Whisper model. Default: `"base"` |
 | `transcription` | str | Output format: `"plain_text"`, `"formatted_text"`, `"srt"`, `"vtt"`. Default: `"plain_text"` |
 | `translate` | bool | Translate to English. Default: `false` |
@@ -163,8 +163,11 @@ Existing callers that don't send `clap_queries` get the same behavior as before 
 
 ### Holy Grale span-stream mode
 
-For Studio's streaming-first pipeline, callers may send a final-tier span-stream
-job instead of a single `audio` URL:
+For Studio's streaming-first pipeline, callers may send a span-stream job
+instead of a single `audio` URL.
+
+Final-tier mode transcribes ready spans with the same quality settings as the
+classic Studio path:
 
 ```json
 {
@@ -187,6 +190,47 @@ The handler yields one normal transcription result per span, with `span_index`
 and `start_sec` added. `return_aggregate_stream` is enabled, so clients can use
 `/stream` for incremental span results while `/run` and `/runsync` can still
 receive the aggregate list.
+
+Draft-tier mode is the Holy Grale ticker probe path. It polls a growing
+`next_url` endpoint for small audio segments, transcribes each available segment
+with Whisper `turbo` using beam size 1, skips CLAP and forced alignment, and
+yields ticker batches:
+
+```json
+{
+  "input": {
+    "span_stream": {
+      "mode": "draft",
+      "next_url": "https://example.com/next-audio?after=0",
+      "poll_ms": 500,
+      "budget_sec": 480,
+      "idle_timeout_sec": 30
+    },
+    "language": "en"
+  }
+}
+```
+
+Each segment yield has:
+
+```json
+{
+  "mode": "draft",
+  "event": "segment",
+  "yield_index": 0,
+  "cursor": "1",
+  "next_url": "https://example.com/next-audio?after=1",
+  "start_sec": 0,
+  "end_sec": 10,
+  "words": [{ "word": "Hello", "start": 0.1, "end": 0.4, "probability": 0.91 }],
+  "transcription": "Hello..."
+}
+```
+
+When the draft job reaches EOF, idle timeout, or the budget, it emits a terminal
+control yield with `event:"closed"` and `reason:"eof" | "idle_timeout" |
+"budget_exhausted"`. The server can chain a successor draft job from the returned
+`cursor` and `next_url`.
 
 ## Based on
 

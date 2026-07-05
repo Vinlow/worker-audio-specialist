@@ -10,6 +10,10 @@ import json
 import os
 import shutil
 import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import numpy as np
 
@@ -36,6 +40,16 @@ def base64_to_tempfile(base64_file: str) -> str:
     '''
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
         temp_file.write(base64.b64decode(base64_file))
+
+    return temp_file.name
+
+
+def bytes_to_tempfile(data: bytes, suffix=".aac") -> str:
+    '''
+    Write binary audio bytes to a tempfile.
+    '''
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+        temp_file.write(data)
 
     return temp_file.name
 
@@ -77,16 +91,10 @@ def to_jsonable(o):
     return o
 
 
-def validate_span_stream(span_stream):
+def validate_final_span_stream(span_stream):
     '''
-    Validate the Holy Grale span-stream input shape.
-
-    Returns an error string on invalid input, otherwise None.
+    Validate the Holy Grale final-tier span-stream input shape.
     '''
-    if not isinstance(span_stream, dict):
-        return 'span_stream must be an object'
-    if span_stream.get('mode') != 'final':
-        return 'span_stream.mode must be "final"'
     spans = span_stream.get('spans')
     if not isinstance(spans, list) or len(spans) == 0:
         return 'span_stream.spans must be a non-empty list'
@@ -105,7 +113,151 @@ def validate_span_stream(span_stream):
     return None
 
 
-def run_span_stream_job(job, job_input, span_stream):
+def validate_draft_span_stream(span_stream):
+    '''
+    Validate the Holy Grale draft ticker span-stream input shape.
+    '''
+    next_url = span_stream.get('next_url')
+    if not isinstance(next_url, str) or next_url.strip() == '':
+        return 'span_stream.next_url must be a non-empty URL'
+
+    poll_ms = span_stream.get('poll_ms', 500)
+    if not isinstance(poll_ms, (int, float)) or poll_ms < 100 or poll_ms > 5000:
+        return 'span_stream.poll_ms must be a number between 100 and 5000'
+
+    budget_sec = span_stream.get('budget_sec', 480)
+    if not isinstance(budget_sec, (int, float)) or budget_sec <= 0 or budget_sec > 540:
+        return 'span_stream.budget_sec must be a number between 0 and 540'
+
+    idle_timeout_sec = span_stream.get('idle_timeout_sec', 30)
+    if not isinstance(idle_timeout_sec, (int, float)) or idle_timeout_sec <= 0 or idle_timeout_sec > 120:
+        return 'span_stream.idle_timeout_sec must be a number between 0 and 120'
+
+    return None
+
+
+def validate_span_stream(span_stream):
+    '''
+    Validate the Holy Grale span-stream input shape.
+
+    Returns an error string on invalid input, otherwise None.
+    '''
+    if not isinstance(span_stream, dict):
+        return 'span_stream must be an object'
+    mode = span_stream.get('mode')
+    if mode == 'final':
+        return validate_final_span_stream(span_stream)
+    if mode == 'draft':
+        return validate_draft_span_stream(span_stream)
+    return 'span_stream.mode must be "final" or "draft"'
+
+
+def update_url_cursor(next_url, cursor):
+    '''
+    Add or replace the `after` query param used by the draft polling endpoint.
+    '''
+    if cursor is None:
+        return next_url
+    parsed = urllib.parse.urlparse(next_url)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    query['after'] = [str(cursor)]
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query, doseq=True)))
+
+
+def parse_float(value, default=None):
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def fetch_draft_audio(job_id, next_url, temp_paths):
+    '''
+    Poll the draft next-audio endpoint.
+
+    Supported responses:
+    - 204: no new audio yet
+    - application/json: {audio|audio_url|audio_base64, cursor, next_url, start_sec, end_sec, done}
+    - audio bytes: body is the next micro-segment; cursor/start/end can be response headers
+    '''
+    request = urllib.request.Request(
+        next_url,
+        headers={
+            'Accept': 'application/json,audio/aac,audio/wav,*/*',
+            'User-Agent': 'web2labs-audio-specialist-draft/1',
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            status = response.getcode()
+            headers = response.headers
+            body = response.read()
+    except urllib.error.HTTPError as error:
+        if error.code in (204, 404):
+            return {'available': False}
+        raise
+
+    if status == 204:
+        return {'available': False}
+
+    content_type = (headers.get('content-type') or '').lower()
+    if 'application/json' in content_type:
+        payload = json.loads(body.decode('utf-8') or '{}')
+        if payload.get('done'):
+            return {
+                'available': False,
+                'done': True,
+                'cursor': payload.get('cursor') or payload.get('next_cursor'),
+                'next_url': payload.get('next_url'),
+            }
+
+        audio_input = None
+        audio_url = payload.get('audio') or payload.get('audio_url')
+        if isinstance(audio_url, str) and audio_url.strip():
+            audio_input = download_files_from_urls(job_id, [audio_url])[0]
+            if not audio_input:
+                raise RuntimeError(f"MEDIA_FETCH_FAILED: could not download audio from {audio_url}")
+        else:
+            audio_base64 = payload.get('audio_base64') or payload.get('audio_b64')
+            if isinstance(audio_base64, str) and audio_base64.strip():
+                audio_input = base64_to_tempfile(audio_base64)
+                temp_paths.append(audio_input)
+
+        if not audio_input:
+            return {
+                'available': False,
+                'cursor': payload.get('cursor') or payload.get('next_cursor'),
+                'next_url': payload.get('next_url'),
+            }
+
+        return {
+            'available': True,
+            'audio_input': audio_input,
+            'cursor': payload.get('cursor') or payload.get('next_cursor'),
+            'next_url': payload.get('next_url'),
+            'start_sec': parse_float(payload.get('start_sec'), 0.0),
+            'end_sec': parse_float(payload.get('end_sec')),
+        }
+
+    if not body:
+        return {'available': False}
+
+    suffix = '.wav' if 'wav' in content_type else '.aac'
+    audio_input = bytes_to_tempfile(body, suffix=suffix)
+    temp_paths.append(audio_input)
+    return {
+        'available': True,
+        'audio_input': audio_input,
+        'cursor': headers.get('x-next-cursor') or headers.get('x-cursor'),
+        'next_url': headers.get('x-next-url'),
+        'start_sec': parse_float(headers.get('x-start-sec'), 0.0),
+        'end_sec': parse_float(headers.get('x-end-sec')),
+    }
+
+
+def run_final_span_stream_job(job, job_input, span_stream):
     '''
     Run final-tier transcription for multiple ready spans and yield each result.
 
@@ -153,6 +305,120 @@ def run_span_stream_job(job, job_input, span_stream):
     finally:
         with rp_debugger.LineTimer('span_stream_cleanup_step'):
             cleanup_job_artifacts(job.get('id'))
+
+
+def run_draft_span_stream_job(job, job_input, span_stream):
+    '''
+    Run draft-tier pull-loop transcription and yield ticker batches.
+    '''
+    next_url = span_stream['next_url']
+    cursor = span_stream.get('cursor')
+    poll_ms = float(span_stream.get('poll_ms', 500))
+    budget_sec = float(span_stream.get('budget_sec', 480))
+    idle_timeout_sec = float(span_stream.get('idle_timeout_sec', 30))
+    budget_deadline = time.monotonic() + budget_sec
+    idle_deadline = time.monotonic() + idle_timeout_sec
+    yield_index = 0
+    temp_paths = []
+
+    def closed(reason):
+        return {
+            'mode': 'draft',
+            'event': 'closed',
+            'reason': reason,
+            'cursor': cursor,
+            'next_url': next_url,
+            'yield_index': yield_index,
+        }
+
+    try:
+        while time.monotonic() < budget_deadline:
+            poll_url = update_url_cursor(next_url, cursor)
+            with rp_debugger.LineTimer('draft_poll_step'):
+                draft_audio = fetch_draft_audio(job.get('id'), poll_url, temp_paths)
+
+            if draft_audio.get('next_url'):
+                next_url = draft_audio['next_url']
+            if draft_audio.get('cursor') is not None:
+                cursor = draft_audio['cursor']
+
+            if draft_audio.get('done'):
+                yield closed('eof')
+                return
+
+            if not draft_audio.get('available'):
+                if time.monotonic() >= idle_deadline:
+                    yield closed('idle_timeout')
+                    return
+                time.sleep(poll_ms / 1000.0)
+                continue
+
+            idle_deadline = time.monotonic() + idle_timeout_sec
+            start_sec = float(draft_audio.get('start_sec') or 0.0)
+            end_sec = draft_audio.get('end_sec')
+
+            with rp_debugger.LineTimer('draft_prediction_step'):
+                whisper_results = MODEL.predict(
+                    audio=draft_audio['audio_input'],
+                    model_name='turbo',
+                    transcription='plain_text',
+                    translation='plain_text',
+                    translate=False,
+                    language=job_input["language"],
+                    temperature=0,
+                    best_of=1,
+                    beam_size=1,
+                    patience=1.0,
+                    length_penalty=job_input["length_penalty"],
+                    suppress_tokens=job_input.get("suppress_tokens", "-1"),
+                    initial_prompt=job_input["initial_prompt"],
+                    condition_on_previous_text=job_input["condition_on_previous_text"],
+                    temperature_increment_on_fallback=job_input["temperature_increment_on_fallback"],
+                    compression_ratio_threshold=job_input["compression_ratio_threshold"],
+                    logprob_threshold=job_input["logprob_threshold"],
+                    no_speech_threshold=job_input["no_speech_threshold"],
+                    enable_vad=job_input["enable_vad"],
+                    word_timestamps=True,
+                    clap_queries=None,
+                    force_align=False,
+                )
+
+            words = whisper_results.get('word_timestamps') or []
+            if end_sec is None:
+                last_word_end = max([parse_float(word.get('end'), 0.0) for word in words], default=0.0)
+                end_sec = start_sec + last_word_end
+
+            yield to_jsonable({
+                'mode': 'draft',
+                'event': 'segment',
+                'yield_index': yield_index,
+                'cursor': cursor,
+                'next_url': next_url,
+                'start_sec': start_sec,
+                'end_sec': end_sec,
+                'words': words,
+                'transcription': whisper_results.get('transcription', ''),
+                'segments': whisper_results.get('segments', []),
+                'detected_language': whisper_results.get('detected_language'),
+                'model': whisper_results.get('model'),
+            })
+            yield_index += 1
+
+        yield closed('budget_exhausted')
+    finally:
+        with rp_debugger.LineTimer('draft_span_stream_cleanup_step'):
+            for path in temp_paths:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            cleanup_job_artifacts(job.get('id'))
+
+
+def run_span_stream_job(job, job_input, span_stream):
+    if span_stream.get('mode') == 'draft':
+        return run_draft_span_stream_job(job, job_input, span_stream)
+    return run_final_span_stream_job(job, job_input, span_stream)
 
 
 @rp_debugger.FunctionTimer
