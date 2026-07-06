@@ -137,6 +137,16 @@ def validate_draft_span_stream(span_stream):
     return None
 
 
+def validate_draft_warmup_span_stream(span_stream):
+    '''
+    Validate the Holy Grale draft warmup input shape.
+    '''
+    model = span_stream.get('model')
+    if model is not None and (not isinstance(model, str) or model.strip() == ''):
+        return 'span_stream.model must be a non-empty string when provided'
+    return None
+
+
 def validate_span_stream(span_stream):
     '''
     Validate the Holy Grale span-stream input shape.
@@ -150,7 +160,9 @@ def validate_span_stream(span_stream):
         return validate_final_span_stream(span_stream)
     if mode == 'draft':
         return validate_draft_span_stream(span_stream)
-    return 'span_stream.mode must be "final" or "draft"'
+    if mode == 'draft_warmup':
+        return validate_draft_warmup_span_stream(span_stream)
+    return 'span_stream.mode must be "final", "draft", or "draft_warmup"'
 
 
 def update_url_cursor(next_url, cursor):
@@ -481,9 +493,37 @@ def run_draft_span_stream_job(job, job_input, span_stream):
             cleanup_job_artifacts(job.get('id'))
 
 
+def run_draft_warmup_span_stream_job(job, job_input, span_stream):
+    '''
+    Load the draft ASR model without polling audio so Studio can hide cold start
+    behind draft creation/upload time.
+    '''
+    job_started = time.monotonic()
+    model_name = span_stream.get('model') or job_input.get('model') or 'turbo'
+    warmup_started = time.monotonic()
+    try:
+        MODEL.ensure_model_loaded(model_name)
+        model_warmup_ms = elapsed_ms(warmup_started)
+        yield to_jsonable({
+            'mode': 'draft_warmup',
+            'event': 'warmed',
+            'model': model_name,
+            'yield_index': 0,
+            'timing': {
+                'job_elapsed_ms': elapsed_ms(job_started),
+                'model_warmup_ms': model_warmup_ms,
+            },
+        })
+    finally:
+        with rp_debugger.LineTimer('draft_warmup_cleanup_step'):
+            cleanup_job_artifacts(job.get('id'))
+
+
 def run_span_stream_job(job, job_input, span_stream):
     if span_stream.get('mode') == 'draft':
         return run_draft_span_stream_job(job, job_input, span_stream)
+    if span_stream.get('mode') == 'draft_warmup':
+        return run_draft_warmup_span_stream_job(job, job_input, span_stream)
     return run_final_span_stream_job(job, job_input, span_stream)
 
 

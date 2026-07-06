@@ -32,7 +32,7 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 |---|---|---|
 | `audio` | str | URL to audio file |
 | `audio_base64` | str | Base64-encoded audio file |
-| `span_stream` | dict | Holy Grale streaming mode. Final mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Draft mode: `{mode:"draft", next_url, poll_ms?, budget_sec?, idle_timeout_sec?}`. Mutually exclusive with `audio`/`audio_base64`; yields results via `/stream`. |
+| `span_stream` | dict | Holy Grale streaming mode. Final mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Draft mode: `{mode:"draft", next_url, poll_ms?, budget_sec?, idle_timeout_sec?}`. Draft warmup mode: `{mode:"draft_warmup", model?}`. Mutually exclusive with `audio`/`audio_base64`; yields results via `/stream`. |
 | `model` | str | Whisper model. Default: `"base"` |
 | `transcription` | str | Output format: `"plain_text"`, `"formatted_text"`, `"srt"`, `"vtt"`. Default: `"plain_text"` |
 | `translate` | bool | Translate to English. Default: `false` |
@@ -240,6 +240,37 @@ When the draft job reaches EOF, idle timeout, or the budget, it emits a terminal
 control yield with `event:"closed"` and `reason:"eof" | "idle_timeout" |
 "budget_exhausted"`. The server can chain a successor draft job from the returned
 `cursor` and `next_url`.
+
+Draft warmup mode loads the draft ASR model without polling audio, so Studio can
+hide cold-start latency during draft creation/upload:
+
+```json
+{
+  "input": {
+    "span_stream": {
+      "mode": "draft_warmup",
+      "model": "turbo"
+    },
+    "model": "turbo",
+    "word_timestamps": false
+  }
+}
+```
+
+It yields a single control event:
+
+```json
+{
+  "mode": "draft_warmup",
+  "event": "warmed",
+  "model": "turbo",
+  "yield_index": 0,
+  "timing": {
+    "job_elapsed_ms": 900,
+    "model_warmup_ms": 900
+  }
+}
+```
 
 ## Based on
 
