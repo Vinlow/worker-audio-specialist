@@ -429,8 +429,10 @@ def run_whisper_job(job):
     Parameters:
     job (dict): Input job containing the model parameters
 
-    Returns:
-    dict: The result of the prediction
+    Yields:
+    dict: Streaming results. Runpod detects streaming support from this function
+    being a generator function, so span-stream modes must yield from here rather
+    than returning a nested generator object.
     '''
     job_input = job['input']
 
@@ -442,7 +444,8 @@ def run_whisper_job(job):
         input_validation = validate(job_input, INPUT_VALIDATIONS)
 
         if 'errors' in input_validation:
-            return {"error": input_validation['errors']}
+            yield {"error": input_validation['errors']}
+            return
         job_input = input_validation['validated_input']
 
     # Restore clap_queries after validation
@@ -452,14 +455,18 @@ def run_whisper_job(job):
     if raw_span_stream is not None:
         span_error = validate_span_stream(raw_span_stream)
         if span_error:
-            return {'error': span_error}
-        return run_span_stream_job(job, job_input, raw_span_stream)
+            yield {'error': span_error}
+            return
+        yield from run_span_stream_job(job, job_input, raw_span_stream)
+        return
 
     if not job_input.get('audio', False) and not job_input.get('audio_base64', False):
-        return {'error': 'Must provide either audio or audio_base64'}
+        yield {'error': 'Must provide either audio or audio_base64'}
+        return
 
     if job_input.get('audio', False) and job_input.get('audio_base64', False):
-        return {'error': 'Must provide either audio or audio_base64, not both'}
+        yield {'error': 'Must provide either audio or audio_base64, not both'}
+        return
 
     base64_temp_path = None
     try:
@@ -474,7 +481,8 @@ def run_whisper_job(job):
                 # web2labs abstain-matrix post-mortem). Fail with a clear,
                 # classifiable signature instead — the web2labs server
                 # recognizes MEDIA_FETCH_FAILED and skips its model-fallback retry.
-                return {'error': f"MEDIA_FETCH_FAILED: could not download audio from {job_input['audio']}"}
+                yield {'error': f"MEDIA_FETCH_FAILED: could not download audio from {job_input['audio']}"}
+                return
 
         if job_input.get('audio_base64', False):
             base64_temp_path = base64_to_tempfile(job_input['audio_base64'])
@@ -524,7 +532,8 @@ def run_whisper_job(job):
         except Exception as e:
             print(f"[Test] Failed to write {output_path}: {e}", flush=True)
 
-    return whisper_results
+    yield to_jsonable(whisper_results)
+    return
 
 
 runpod.serverless.start({
