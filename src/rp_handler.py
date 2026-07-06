@@ -265,16 +265,16 @@ def run_final_span_stream_job(job, job_input, span_stream):
     single-audio jobs still return a plain dict from run_whisper_job.
     '''
     try:
-        for span in span_stream['spans']:
+        for span_pos, span in enumerate(span_stream['spans']):
             span_index = int(span['index'])
             audio_url = span['audio']
             start_sec = float(span['start_sec'])
-            with rp_debugger.LineTimer(f'span_{span_index}_download_step'):
+            with rp_debugger.LineTimer(f'span_{span_pos}_download_step'):
                 audio_input = download_files_from_urls(job['id'], [audio_url])[0]
             if not audio_input:
                 raise RuntimeError(f"MEDIA_FETCH_FAILED: could not download audio from {audio_url}")
 
-            with rp_debugger.LineTimer(f'span_{span_index}_prediction_step'):
+            with rp_debugger.LineTimer(f'span_{span_pos}_prediction_step'):
                 whisper_results = MODEL.predict(
                     audio=audio_input,
                     model_name=job_input["model"],
@@ -318,6 +318,7 @@ def run_draft_span_stream_job(job, job_input, span_stream):
     idle_timeout_sec = float(span_stream.get('idle_timeout_sec', 30))
     budget_deadline = time.monotonic() + budget_sec
     idle_deadline = time.monotonic() + idle_timeout_sec
+    poll_index = 0
     yield_index = 0
     temp_paths = []
 
@@ -334,7 +335,9 @@ def run_draft_span_stream_job(job, job_input, span_stream):
     try:
         while time.monotonic() < budget_deadline:
             poll_url = update_url_cursor(next_url, cursor)
-            with rp_debugger.LineTimer('draft_poll_step'):
+            current_poll_index = poll_index
+            poll_index += 1
+            with rp_debugger.LineTimer(f'draft_poll_step_{current_poll_index}'):
                 draft_audio = fetch_draft_audio(job.get('id'), poll_url, temp_paths)
 
             if draft_audio.get('next_url'):
@@ -357,7 +360,7 @@ def run_draft_span_stream_job(job, job_input, span_stream):
             start_sec = float(draft_audio.get('start_sec') or 0.0)
             end_sec = draft_audio.get('end_sec')
 
-            with rp_debugger.LineTimer('draft_prediction_step'):
+            with rp_debugger.LineTimer(f'draft_prediction_step_{yield_index}'):
                 whisper_results = MODEL.predict(
                     audio=draft_audio['audio_input'],
                     model_name='turbo',
