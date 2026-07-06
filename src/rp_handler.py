@@ -440,6 +440,22 @@ def run_whisper_job(job):
     raw_clap_queries = job_input.pop('clap_queries', None)
     raw_span_stream = job_input.pop('span_stream', None)
 
+    # RunPod serverless streaming jobs can be retried as timed out if a cold
+    # worker spends too long loading models before the first stream item.
+    # Emit a cheap control item immediately; Studio ignores unknown events.
+    if raw_span_stream is not None:
+        yield {
+            'mode': raw_span_stream.get('mode'),
+            'event': 'started',
+            'yield_index': -1,
+        }
+    else:
+        yield {
+            'mode': 'classic',
+            'event': 'started',
+            'yield_index': -1,
+        }
+
     with rp_debugger.LineTimer('validation_step'):
         input_validation = validate(job_input, INPUT_VALIDATIONS)
 
