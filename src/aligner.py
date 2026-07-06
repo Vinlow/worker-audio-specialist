@@ -31,6 +31,7 @@ Notes:
 """
 
 import re
+import threading
 from typing import List, Optional, Tuple
 
 import librosa
@@ -60,24 +61,44 @@ class Wav2Vec2Aligner:
         self.sample_rate: Optional[int] = None
         self.device: Optional[str] = None
         self.word_separator_idx: Optional[int] = None
+        self._setup_lock = threading.Lock()
 
     def setup(self, device: str = "cuda"):
         """Load the model. Idempotent — safe to call multiple times."""
-        if self.model is not None and self.device == device:
-            return
-        print(f"[Wav2Vec2Aligner] loading WAV2VEC2_ASR_LARGE_LV60K_960H on {device}...", flush=True)
-        self.device = device
-        self.model = BUNDLE.get_model().to(device).eval()
-        self.labels = BUNDLE.get_labels()
-        self.sample_rate = BUNDLE.sample_rate
-        self.label_to_idx = {ch: i for i, ch in enumerate(self.labels)}
-        # Word boundary char in this model's vocab is '|'
-        self.word_separator_idx = self.label_to_idx.get("|", 4)
-        print(
-            f"[Wav2Vec2Aligner] loaded | vocab={len(self.labels)} sr={self.sample_rate} "
-            f"blank={BLANK_IDX} word_sep={self.word_separator_idx}",
-            flush=True,
-        )
+        with self._setup_lock:
+            if self.model is not None and self.device == device:
+                return
+            print(f"[Wav2Vec2Aligner] loading WAV2VEC2_ASR_LARGE_LV60K_960H on {device}...", flush=True)
+            try:
+                # Materialize weights on CPU first, then move the hydrated
+                # module to CUDA. Calling .to(device) on a module that still has
+                # meta tensors fails because those tensors have no backing data.
+                with torch.device("cpu"):
+                    model = BUNDLE.get_model(dl_kwargs={"map_location": "cpu"})
+
+                if any(getattr(param, "is_meta", False) for param in model.parameters()):
+                    raise RuntimeError("wav2vec2 bundle returned meta tensors")
+
+                self.model = model.to(device).eval()
+                self.device = device
+                self.labels = BUNDLE.get_labels()
+                self.sample_rate = BUNDLE.sample_rate
+                self.label_to_idx = {ch: i for i, ch in enumerate(self.labels)}
+                # Word boundary char in this model's vocab is '|'
+                self.word_separator_idx = self.label_to_idx.get("|", 4)
+                print(
+                    f"[Wav2Vec2Aligner] loaded | vocab={len(self.labels)} sr={self.sample_rate} "
+                    f"blank={BLANK_IDX} word_sep={self.word_separator_idx}",
+                    flush=True,
+                )
+            except Exception:
+                self.model = None
+                self.device = None
+                self.labels = None
+                self.sample_rate = None
+                self.label_to_idx = None
+                self.word_separator_idx = None
+                raise
 
     @staticmethod
     def normalize_word(word: str) -> str:
