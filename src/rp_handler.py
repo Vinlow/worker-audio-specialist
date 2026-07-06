@@ -421,7 +421,6 @@ def run_span_stream_job(job, job_input, span_stream):
     return run_final_span_stream_job(job, job_input, span_stream)
 
 
-@rp_debugger.FunctionTimer
 def run_whisper_job(job):
     '''
     Run inference on the model.
@@ -431,8 +430,9 @@ def run_whisper_job(job):
 
     Yields:
     dict: Streaming results. Runpod detects streaming support from this function
-    being a generator function, so span-stream modes must yield from here rather
-    than returning a nested generator object.
+    being a generator function via inspect.isgeneratorfunction(). Do not wrap
+    this function with class decorators such as rp_debugger.FunctionTimer; that
+    hides the generator shape and disables /stream support.
     '''
     job_input = job['input']
 
