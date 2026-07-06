@@ -13,6 +13,7 @@ so scoring 120 windows takes ~2-3s on GPU instead of ~50s sequentially.
 
 import threading
 import numpy as np
+from hf_auth import hf_from_pretrained_kwargs
 
 CLAP_MODEL_ID = "laion/larger_clap_music_and_speech"
 WINDOW_SIZE = 1.0  # Score per 1-second window
@@ -41,8 +42,11 @@ class ClapScorer:
         from transformers import ClapModel, ClapProcessor
 
         print(f"[ClapScorer] Loading CLAP model: {CLAP_MODEL_ID}")
-        self.processor = ClapProcessor.from_pretrained(CLAP_MODEL_ID)
-        self.model = ClapModel.from_pretrained(CLAP_MODEL_ID)
+        pretrained_kwargs = hf_from_pretrained_kwargs()
+        if pretrained_kwargs:
+            print("[ClapScorer] Hugging Face token detected; using authenticated model fetch")
+        self.processor = ClapProcessor.from_pretrained(CLAP_MODEL_ID, **pretrained_kwargs)
+        self.model = ClapModel.from_pretrained(CLAP_MODEL_ID, **pretrained_kwargs)
         self.model.eval()
 
         if torch.cuda.is_available():

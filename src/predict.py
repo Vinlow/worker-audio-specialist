@@ -19,6 +19,7 @@ from faster_whisper import WhisperModel
 from faster_whisper.utils import format_timestamp
 from clap_scorer import ClapScorer
 from aligner import Wav2Vec2Aligner
+from hf_auth import normalize_hf_token_env
 
 def parse_suppress_tokens(raw):
     """
@@ -62,6 +63,8 @@ class Predictor:
 
     def __init__(self):
         """Initializes the predictor with no models loaded."""
+        if normalize_hf_token_env():
+            print("[Predictor] Hugging Face token detected; authenticated hub fetches enabled")
         self.models = {}
         self.model_lock = (
             threading.Lock()
