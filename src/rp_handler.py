@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -173,6 +174,10 @@ def parse_float(value, default=None):
         return default
 
 
+def elapsed_ms(start):
+    return int(max(0.0, (time.monotonic() - start) * 1000.0))
+
+
 def fetch_draft_audio(job_id, next_url, temp_paths):
     '''
     Poll the draft next-audio endpoint.
@@ -182,6 +187,12 @@ def fetch_draft_audio(job_id, next_url, temp_paths):
     - application/json: {audio|audio_url|audio_base64, cursor, next_url, start_sec, end_sec, done}
     - audio bytes: body is the next micro-segment; cursor/start/end can be response headers
     '''
+    request_started = time.monotonic()
+    timing = {
+        'request_ms': 0,
+        'body_bytes': 0,
+        'audio_download_ms': 0,
+    }
     request = urllib.request.Request(
         next_url,
         headers={
@@ -194,13 +205,16 @@ def fetch_draft_audio(job_id, next_url, temp_paths):
             status = response.getcode()
             headers = response.headers
             body = response.read()
+            timing['request_ms'] = elapsed_ms(request_started)
+            timing['body_bytes'] = len(body or b'')
     except urllib.error.HTTPError as error:
+        timing['request_ms'] = elapsed_ms(request_started)
         if error.code in (204, 404):
-            return {'available': False}
+            return {'available': False, 'timing': timing}
         raise
 
     if status == 204:
-        return {'available': False}
+        return {'available': False, 'timing': timing}
 
     content_type = (headers.get('content-type') or '').lower()
     if 'application/json' in content_type:
@@ -211,12 +225,15 @@ def fetch_draft_audio(job_id, next_url, temp_paths):
                 'done': True,
                 'cursor': payload.get('cursor') or payload.get('next_cursor'),
                 'next_url': payload.get('next_url'),
+                'timing': timing,
             }
 
         audio_input = None
         audio_url = payload.get('audio') or payload.get('audio_url')
         if isinstance(audio_url, str) and audio_url.strip():
+            download_started = time.monotonic()
             audio_input = download_files_from_urls(job_id, [audio_url])[0]
+            timing['audio_download_ms'] = elapsed_ms(download_started)
             if not audio_input:
                 raise RuntimeError(f"MEDIA_FETCH_FAILED: could not download audio from {audio_url}")
         else:
@@ -230,6 +247,7 @@ def fetch_draft_audio(job_id, next_url, temp_paths):
                 'available': False,
                 'cursor': payload.get('cursor') or payload.get('next_cursor'),
                 'next_url': payload.get('next_url'),
+                'timing': timing,
             }
 
         return {
@@ -239,10 +257,11 @@ def fetch_draft_audio(job_id, next_url, temp_paths):
             'next_url': payload.get('next_url'),
             'start_sec': parse_float(payload.get('start_sec'), 0.0),
             'end_sec': parse_float(payload.get('end_sec')),
+            'timing': timing,
         }
 
     if not body:
-        return {'available': False}
+        return {'available': False, 'timing': timing}
 
     suffix = '.wav' if 'wav' in content_type else '.aac'
     audio_input = bytes_to_tempfile(body, suffix=suffix)
@@ -254,6 +273,7 @@ def fetch_draft_audio(job_id, next_url, temp_paths):
         'next_url': headers.get('x-next-url'),
         'start_sec': parse_float(headers.get('x-start-sec'), 0.0),
         'end_sec': parse_float(headers.get('x-end-sec')),
+        'timing': timing,
     }
 
 
@@ -316,11 +336,31 @@ def run_draft_span_stream_job(job, job_input, span_stream):
     poll_ms = float(span_stream.get('poll_ms', 500))
     budget_sec = float(span_stream.get('budget_sec', 480))
     idle_timeout_sec = float(span_stream.get('idle_timeout_sec', 30))
+    job_started = time.monotonic()
     budget_deadline = time.monotonic() + budget_sec
     idle_deadline = time.monotonic() + idle_timeout_sec
     poll_index = 0
     yield_index = 0
     temp_paths = []
+    model_warmup_ms = None
+    model_warmup_error = None
+
+    def warm_turbo_model():
+        nonlocal model_warmup_ms, model_warmup_error
+        warm_started = time.monotonic()
+        try:
+            MODEL.ensure_model_loaded('turbo')
+        except Exception as error:
+            model_warmup_error = str(error)
+        finally:
+            model_warmup_ms = elapsed_ms(warm_started)
+
+    warmup_thread = threading.Thread(
+        target=warm_turbo_model,
+        name='draft-turbo-warmup',
+        daemon=True,
+    )
+    warmup_thread.start()
 
     def closed(reason):
         return {
@@ -330,6 +370,10 @@ def run_draft_span_stream_job(job, job_input, span_stream):
             'cursor': cursor,
             'next_url': next_url,
             'yield_index': yield_index,
+            'timing': {
+                'job_elapsed_ms': elapsed_ms(job_started),
+                'model_warmup_ms': model_warmup_ms,
+            },
         }
 
     try:
@@ -359,7 +403,14 @@ def run_draft_span_stream_job(job, job_input, span_stream):
             idle_deadline = time.monotonic() + idle_timeout_sec
             start_sec = float(draft_audio.get('start_sec') or 0.0)
             end_sec = draft_audio.get('end_sec')
+            model_wait_started = time.monotonic()
+            if warmup_thread.is_alive():
+                warmup_thread.join()
+            model_warmup_wait_ms = elapsed_ms(model_wait_started)
+            if model_warmup_error:
+                raise RuntimeError(f"draft turbo warmup failed: {model_warmup_error}")
 
+            prediction_started = time.monotonic()
             with rp_debugger.LineTimer(f'draft_prediction_step_{yield_index}'):
                 whisper_results = MODEL.predict(
                     audio=draft_audio['audio_input'],
@@ -385,11 +436,13 @@ def run_draft_span_stream_job(job, job_input, span_stream):
                     clap_queries=None,
                     force_align=False,
                 )
+            prediction_ms = elapsed_ms(prediction_started)
 
             words = whisper_results.get('word_timestamps') or []
             if end_sec is None:
                 last_word_end = max([parse_float(word.get('end'), 0.0) for word in words], default=0.0)
                 end_sec = start_sec + last_word_end
+            fetch_timing = draft_audio.get('timing') or {}
 
             yield to_jsonable({
                 'mode': 'draft',
@@ -404,6 +457,16 @@ def run_draft_span_stream_job(job, job_input, span_stream):
                 'segments': whisper_results.get('segments', []),
                 'detected_language': whisper_results.get('detected_language'),
                 'model': whisper_results.get('model'),
+                'timing': {
+                    'job_elapsed_ms': elapsed_ms(job_started),
+                    'poll_index': current_poll_index,
+                    'poll_ms': fetch_timing.get('request_ms'),
+                    'poll_body_bytes': fetch_timing.get('body_bytes'),
+                    'audio_download_ms': fetch_timing.get('audio_download_ms'),
+                    'model_warmup_ms': model_warmup_ms,
+                    'model_warmup_wait_ms': model_warmup_wait_ms,
+                    'prediction_ms': prediction_ms,
+                },
             })
             yield_index += 1
 

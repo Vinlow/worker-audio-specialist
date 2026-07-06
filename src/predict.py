@@ -121,6 +121,25 @@ class Predictor:
                 print(f"Error loading model {model_name}: {e}")
                 raise ValueError(f"Failed to load model {model_name}: {e}") from e
 
+    def ensure_model_loaded(self, model_name):
+        """
+        Preload a model without running transcription. Draft stream jobs use
+        this to overlap the turbo model load with their initial poll wait.
+        """
+        if model_name not in AVAILABLE_MODELS:
+            raise ValueError(
+                f"Invalid model name: {model_name}. Available models are: {AVAILABLE_MODELS}"
+            )
+
+        with self.model_lock:
+            model = self.models.get(model_name)
+            if model is not None:
+                self.models.pop(model_name)
+                self.models[model_name] = model
+                print(f"Using already loaded model: {model_name}")
+                return model
+            return self._load_model_locked(model_name)
+
     def predict(
         self,
         audio,

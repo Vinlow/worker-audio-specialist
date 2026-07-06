@@ -223,7 +223,16 @@ Each segment yield has:
   "start_sec": 0,
   "end_sec": 10,
   "words": [{ "word": "Hello", "start": 0.1, "end": 0.4, "probability": 0.91 }],
-  "transcription": "Hello..."
+  "transcription": "Hello...",
+  "timing": {
+    "job_elapsed_ms": 2400,
+    "poll_index": 0,
+    "poll_ms": 14,
+    "audio_download_ms": 130,
+    "model_warmup_ms": 900,
+    "model_warmup_wait_ms": 0,
+    "prediction_ms": 820
+  }
 }
 ```
 
