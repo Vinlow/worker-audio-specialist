@@ -17,6 +17,7 @@ from runpod.serverless.utils import rp_cuda
 
 from faster_whisper import WhisperModel
 from faster_whisper.utils import format_timestamp
+from diarizer import SpeakerDiarizer
 from clap_scorer import ClapScorer
 from aligner import Wav2Vec2Aligner
 
@@ -68,6 +69,7 @@ class Predictor:
         )  # Lock for thread-safe model loading/unloading
         self.clap_scorer = ClapScorer()
         self.aligner = Wav2Vec2Aligner()  # lazy-loaded on first force_align call
+        self.diarizer = SpeakerDiarizer()  # lazy-loaded on first diarize call
 
     def setup(self):
         """No models are pre-loaded. Setup is minimal."""
@@ -145,6 +147,9 @@ class Predictor:
         word_timestamps=False,
         clap_queries=None,
         force_align=False,
+        diarize=False,
+        diarize_min_speakers=None,
+        diarize_max_speakers=None,
     ):
         """
         Run a single prediction on the model, loading/unloading models as needed.
@@ -282,6 +287,26 @@ class Predictor:
                     # this is where to add a `word_timestamps_original` field.
                     results["word_timestamps"] = aligned_list
                     results["word_timestamps_aligned"] = True  # flag so callers know
+
+            # Speaker diarization is an OPTIONAL, versioned sidecar. It runs
+            # only after the final Whisper/wav2vec2 word list exists and never
+            # mutates that list or becomes timestamp authority. With
+            # word_timestamps disabled, turns remain useful but word attribution
+            # is intentionally empty.
+            if diarize:
+                # CLAP is already allowed to overlap Whisper and wav2vec (the
+                # established worker schedule), but do not introduce a new
+                # CLAP+pyannote GPU overlap. Joining here is usually free
+                # because CLAP has finished during transcription; if it has
+                # not, stability wins over a tiny sidecar latency gain.
+                if clap_thread is not None:
+                    clap_thread.join()
+                results["speaker_diarization"] = self.diarizer.diarize(
+                    str(audio),
+                    results.get("word_timestamps", []),
+                    min_speakers=diarize_min_speakers,
+                    max_speakers=diarize_max_speakers,
+                )
         finally:
             # The CLAP thread reads the audio file and holds the scorer lock —
             # never let it outlive this job. Without this join on the exception

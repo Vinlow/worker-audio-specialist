@@ -72,6 +72,9 @@ def main() -> int:
         word_timestamps=job_input.get("word_timestamps", False),
         clap_queries=job_input.get("clap_queries"),
         force_align=job_input.get("force_align", False),
+        diarize=job_input.get("diarize", False),
+        diarize_min_speakers=job_input.get("diarize_min_speakers") or None,
+        diarize_max_speakers=job_input.get("diarize_max_speakers") or None,
     )
 
     clean = to_jsonable(result)
