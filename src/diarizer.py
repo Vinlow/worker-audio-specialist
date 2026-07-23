@@ -15,9 +15,12 @@ Why a sidecar instead of ``word["speaker"]``:
 from __future__ import annotations
 
 import os
+import threading
 import time
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from model_load_lock import serialized_model_load
 
 
 DIARIZATION_SCHEMA_VERSION = "w2l-speaker-diarization-v1"
@@ -197,6 +200,7 @@ class SpeakerDiarizer:
         )
         self.pipeline = None
         self.device = None
+        self._setup_lock = threading.Lock()
 
     @staticmethod
     def _package_version() -> str:
@@ -209,47 +213,65 @@ class SpeakerDiarizer:
         if self.pipeline is not None and self.device == device:
             return
 
-        token = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
-        if not token:
-            raise RuntimeError("MISSING_HUGGINGFACE_TOKEN")
+        with self._setup_lock:
+            if self.pipeline is not None and self.device == device:
+                return
 
-        # Keep customer audio out of optional package telemetry by default.
-        os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
-        import torch
-        # PyTorch 2.6+ safely defaults checkpoint loading to
-        # ``weights_only=True``. The official pyannote segmentation-3.0
-        # checkpoint contains TorchVersion metadata, so allowlist that one
-        # inert framework value instead of disabling safe loading for the
-        # entire checkpoint.
-        from pyannote.audio import Pipeline
-        from pyannote.audio.core.task import Problem, Resolution, Specifications
-        from torch.torch_version import TorchVersion
-
-        if hasattr(torch.serialization, "add_safe_globals"):
-            torch.serialization.add_safe_globals(
-                [TorchVersion, Specifications, Problem, Resolution]
+            token = (
+                os.environ.get("HUGGINGFACE_TOKEN")
+                or os.environ.get("HF_TOKEN")
             )
+            if not token:
+                raise RuntimeError("MISSING_HUGGINGFACE_TOKEN")
 
-        print(
-            f"[SpeakerDiarizer] loading {self.model_id} on {device}...",
-            flush=True,
-        )
-        try:
-            pipeline = Pipeline.from_pretrained(self.model_id, token=token)
-        except TypeError:
-            # pyannote.audio 3.x calls this argument use_auth_token. Keeping the
-            # fallback makes a future Community-1 challenger a model/package
-            # change rather than a sidecar-contract rewrite.
-            pipeline = Pipeline.from_pretrained(
-                self.model_id,
-                use_auth_token=token,
+            # Keep customer audio out of optional package telemetry by default.
+            os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
+            import torch
+            # PyTorch 2.6+ safely defaults checkpoint loading to
+            # ``weights_only=True``. The official pyannote segmentation-3.0
+            # checkpoint contains TorchVersion metadata, so allowlist that one
+            # inert framework value instead of disabling safe loading for the
+            # entire checkpoint.
+            from pyannote.audio import Pipeline
+            from pyannote.audio.core.task import (
+                Problem,
+                Resolution,
+                Specifications,
             )
-        if pipeline is None:
-            raise RuntimeError("PYANNOTE_MODEL_UNAVAILABLE_OR_GATED")
-        pipeline.to(torch.device(device))
-        self.pipeline = pipeline
-        self.device = device
-        print("[SpeakerDiarizer] model loaded", flush=True)
+            from torch.torch_version import TorchVersion
+
+            if hasattr(torch.serialization, "add_safe_globals"):
+                torch.serialization.add_safe_globals(
+                    [TorchVersion, Specifications, Problem, Resolution]
+                )
+
+            with serialized_model_load("speaker-diarizer"):
+                if self.pipeline is not None and self.device == device:
+                    return
+                print(
+                    f"[SpeakerDiarizer] loading {self.model_id} on {device}...",
+                    flush=True,
+                )
+                try:
+                    pipeline = Pipeline.from_pretrained(
+                        self.model_id,
+                        token=token,
+                    )
+                except TypeError:
+                    # pyannote.audio 3.x calls this argument use_auth_token.
+                    # Keeping the fallback makes a future Community-1
+                    # challenger a model/package change rather than a sidecar
+                    # contract rewrite.
+                    pipeline = Pipeline.from_pretrained(
+                        self.model_id,
+                        use_auth_token=token,
+                    )
+                if pipeline is None:
+                    raise RuntimeError("PYANNOTE_MODEL_UNAVAILABLE_OR_GATED")
+                pipeline.to(torch.device(device))
+                self.pipeline = pipeline
+                self.device = device
+                print("[SpeakerDiarizer] model loaded", flush=True)
 
     def diarize(
         self,

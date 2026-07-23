@@ -30,6 +30,7 @@ Notes:
   - Speed: ~0.05x realtime on a single A40. 60s chunk = ~3s wall.
 """
 
+import gc
 import re
 import threading
 from typing import List, Optional, Tuple
@@ -38,6 +39,7 @@ import librosa
 import numpy as np
 import torch
 import torchaudio
+from model_load_lock import serialized_model_load
 from torchaudio.pipelines import WAV2VEC2_ASR_LARGE_LV60K_960H as BUNDLE
 
 
@@ -49,6 +51,7 @@ BLANK_IDX = 0
 # chunk (or keep original timing at the very start/end of the file). Absorbs
 # Whisper's own 100-300ms timing error in the selection windows.
 EDGE_MARGIN_SEC = 0.5
+MAX_META_LOAD_ATTEMPTS = 2
 
 
 class Wav2Vec2Aligner:
@@ -68,37 +71,82 @@ class Wav2Vec2Aligner:
         with self._setup_lock:
             if self.model is not None and self.device == device:
                 return
-            print(f"[Wav2Vec2Aligner] loading WAV2VEC2_ASR_LARGE_LV60K_960H on {device}...", flush=True)
-            try:
-                # Materialize weights on CPU first, then move the hydrated
-                # module to CUDA. Calling .to(device) on a module that still has
-                # meta tensors fails because those tensors have no backing data.
-                with torch.device("cpu"):
-                    model = BUNDLE.get_model(dl_kwargs={"map_location": "cpu"})
-
-                if any(getattr(param, "is_meta", False) for param in model.parameters()):
-                    raise RuntimeError("wav2vec2 bundle returned meta tensors")
-
-                self.model = model.to(device).eval()
-                self.device = device
-                self.labels = BUNDLE.get_labels()
-                self.sample_rate = BUNDLE.sample_rate
-                self.label_to_idx = {ch: i for i, ch in enumerate(self.labels)}
-                # Word boundary char in this model's vocab is '|'
-                self.word_separator_idx = self.label_to_idx.get("|", 4)
+            with serialized_model_load("wav2vec2-aligner"):
+                # Another setup call may have completed while this instance was
+                # waiting behind a different component's cold model load.
+                if self.model is not None and self.device == device:
+                    return
                 print(
-                    f"[Wav2Vec2Aligner] loaded | vocab={len(self.labels)} sr={self.sample_rate} "
-                    f"blank={BLANK_IDX} word_sep={self.word_separator_idx}",
+                    "[Wav2Vec2Aligner] loading "
+                    f"WAV2VEC2_ASR_LARGE_LV60K_960H on {device}...",
                     flush=True,
                 )
-            except Exception:
-                self.model = None
-                self.device = None
-                self.labels = None
-                self.sample_rate = None
-                self.label_to_idx = None
-                self.word_separator_idx = None
-                raise
+                try:
+                    model = self._load_hydrated_cpu_model()
+                    # Publish state only after construction and device transfer
+                    # both succeed. A failed attempt must never leave a partial
+                    # model visible to a concurrent or retrying job.
+                    loaded_model = model.to(device).eval()
+                    labels = BUNDLE.get_labels()
+                    label_to_idx = {ch: i for i, ch in enumerate(labels)}
+
+                    self.model = loaded_model
+                    self.device = device
+                    self.labels = labels
+                    self.sample_rate = BUNDLE.sample_rate
+                    self.label_to_idx = label_to_idx
+                    # Word boundary char in this model's vocab is '|'
+                    self.word_separator_idx = label_to_idx.get("|", 4)
+                    print(
+                        f"[Wav2Vec2Aligner] loaded | vocab={len(labels)} "
+                        f"sr={self.sample_rate} blank={BLANK_IDX} "
+                        f"word_sep={self.word_separator_idx}",
+                        flush=True,
+                    )
+                except Exception:
+                    self._clear_setup_state()
+                    raise
+
+    def _load_hydrated_cpu_model(self):
+        """Load a fully materialized CPU model or fail closed.
+
+        A meta module has shapes but no backing parameter data.  It cannot be
+        repaired safely with ``to_empty`` because that would create
+        uninitialized alignment weights. Retry one clean bundle construction,
+        then reject the job if the bundle is still not hydrated.
+        """
+        for attempt in range(1, MAX_META_LOAD_ATTEMPTS + 1):
+            # Materialize weights on CPU first, then move the hydrated module
+            # to CUDA. Calling .to(device) on meta tensors is invalid.
+            with torch.device("cpu"):
+                model = BUNDLE.get_model(dl_kwargs={"map_location": "cpu"})
+
+            if not any(
+                getattr(param, "is_meta", False)
+                for param in model.parameters()
+            ):
+                return model
+
+            print(
+                "[Wav2Vec2Aligner] bundle returned meta tensors "
+                f"(attempt {attempt}/{MAX_META_LOAD_ATTEMPTS})",
+                flush=True,
+            )
+            del model
+            gc.collect()
+
+        raise RuntimeError(
+            "wav2vec2 bundle returned meta tensors after "
+            f"{MAX_META_LOAD_ATTEMPTS} serialized attempts"
+        )
+
+    def _clear_setup_state(self):
+        self.model = None
+        self.device = None
+        self.labels = None
+        self.sample_rate = None
+        self.label_to_idx = None
+        self.word_separator_idx = None
 
     @staticmethod
     def normalize_word(word: str) -> str:

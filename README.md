@@ -17,6 +17,15 @@ All models run on the same GPU, sharing the audio file. CLAP runs **concurrently
 
 Whisper models stay **resident** once loaded (multi-model residency): a request for `small` no longer evicts `large-v3`, so mixed traffic (Studio chunks + tools presets + the `medium` fallback) causes no model-reload churn. The full production set fits in ~9GB alongside CLAP + wav2vec2; on VRAM pressure the least-recently-used model is evicted and the load retried.
 
+Cold construction of CLAP, wav2vec2, and pyannote is serialized through one
+process-wide lock. Current Transformers versions construct models inside a
+temporary meta-device context that patches PyTorch process globals; allowing a
+torchaudio model to start in a parallel thread can otherwise leave that model
+with unmaterialized meta parameters. Only first-load construction and device
+transfer are serialized—resident-model inference remains concurrent. Wav2vec2
+retries one clean serialized construction if a bundle still returns meta
+tensors, then fails closed rather than publishing or inventing weights.
+
 ## Models
 
 Pre-downloaded into the image (instant cold start — every model a production code path requests):

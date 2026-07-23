@@ -1,5 +1,8 @@
 import copy
 import os
+import sys
+import threading
+import types
 import unittest
 from unittest.mock import patch
 
@@ -138,6 +141,70 @@ class DiarizationSidecarTest(unittest.TestCase):
 
         self.assertEqual(sidecar["status"], "FAILED")
         self.assertIn("DIARIZATION_MIN_SPEAKERS_EXCEEDS_MAX", sidecar["error"])
+
+    def test_concurrent_setup_publishes_one_complete_pipeline(self):
+        entered = threading.Event()
+        release = threading.Event()
+        load_calls = []
+        errors = []
+
+        class FakePipeline:
+            @classmethod
+            def from_pretrained(cls, *_args, **_kwargs):
+                load_calls.append(1)
+                entered.set()
+                if not release.wait(timeout=2):
+                    raise RuntimeError("test coordination timeout")
+                return cls()
+
+            def to(self, _device):
+                return self
+
+        fake_pyannote = types.ModuleType("pyannote")
+        fake_audio = types.ModuleType("pyannote.audio")
+        fake_core = types.ModuleType("pyannote.audio.core")
+        fake_task = types.ModuleType("pyannote.audio.core.task")
+        fake_audio.Pipeline = FakePipeline
+        fake_task.Problem = type("Problem", (), {})
+        fake_task.Resolution = type("Resolution", (), {})
+        fake_task.Specifications = type("Specifications", (), {})
+
+        diarizer = SpeakerDiarizer()
+
+        def setup():
+            try:
+                diarizer.setup("cpu")
+            except Exception as exc:
+                errors.append(exc)
+
+        with patch.dict(
+            os.environ,
+            {"HUGGINGFACE_TOKEN": "test-token"},
+            clear=False,
+        ), patch.dict(
+            sys.modules,
+            {
+                "pyannote": fake_pyannote,
+                "pyannote.audio": fake_audio,
+                "pyannote.audio.core": fake_core,
+                "pyannote.audio.core.task": fake_task,
+            },
+        ), patch(
+            "torch.serialization.add_safe_globals",
+        ):
+            first = threading.Thread(target=setup)
+            second = threading.Thread(target=setup)
+            first.start()
+            self.assertTrue(entered.wait(timeout=2))
+            second.start()
+            release.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(load_calls, [1])
+        self.assertIsNotNone(diarizer.pipeline)
+        self.assertEqual(diarizer.device, "cpu")
 
 
 if __name__ == "__main__":

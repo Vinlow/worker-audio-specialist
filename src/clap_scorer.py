@@ -14,6 +14,7 @@ so scoring 120 windows takes ~2-3s on GPU instead of ~50s sequentially.
 import threading
 import numpy as np
 from hf_auth import hf_from_pretrained_kwargs
+from model_load_lock import serialized_model_load
 
 CLAP_MODEL_ID = "laion/larger_clap_music_and_speech"
 WINDOW_SIZE = 1.0  # Score per 1-second window
@@ -38,24 +39,46 @@ class ClapScorer:
         if self.model is not None:
             return
 
-        import torch
-        from transformers import ClapModel, ClapProcessor
+        with serialized_model_load("clap-scorer"):
+            if self.model is not None:
+                return
 
-        print(f"[ClapScorer] Loading CLAP model: {CLAP_MODEL_ID}")
-        pretrained_kwargs = hf_from_pretrained_kwargs()
-        if pretrained_kwargs:
-            print("[ClapScorer] Hugging Face token detected; using authenticated model fetch")
-        self.processor = ClapProcessor.from_pretrained(CLAP_MODEL_ID, **pretrained_kwargs)
-        self.model = ClapModel.from_pretrained(CLAP_MODEL_ID, **pretrained_kwargs)
-        self.model.eval()
+            import torch
+            from transformers import ClapModel, ClapProcessor
 
-        if torch.cuda.is_available():
-            self.model = self.model.to("cuda")
-            self.device = "cuda"
-            print(f"[ClapScorer] Model loaded on GPU ({torch.cuda.get_device_name(0)})")
-        else:
-            self.device = "cpu"
-            print("[ClapScorer] Model loaded on CPU (GPU not available)")
+            print(f"[ClapScorer] Loading CLAP model: {CLAP_MODEL_ID}")
+            pretrained_kwargs = hf_from_pretrained_kwargs()
+            if pretrained_kwargs:
+                print(
+                    "[ClapScorer] Hugging Face token detected; "
+                    "using authenticated model fetch"
+                )
+            # Keep constructed objects local until the complete model is ready.
+            # A failed cold load must not publish a half-initialized scorer.
+            processor = ClapProcessor.from_pretrained(
+                CLAP_MODEL_ID,
+                **pretrained_kwargs,
+            )
+            model = ClapModel.from_pretrained(
+                CLAP_MODEL_ID,
+                **pretrained_kwargs,
+            )
+            model.eval()
+
+            if torch.cuda.is_available():
+                model = model.to("cuda")
+                device = "cuda"
+                print(
+                    "[ClapScorer] Model loaded on GPU "
+                    f"({torch.cuda.get_device_name(0)})"
+                )
+            else:
+                device = "cpu"
+                print("[ClapScorer] Model loaded on CPU (GPU not available)")
+
+            self.processor = processor
+            self.model = model
+            self.device = device
 
     def score(self, wav_path, queries):
         """
