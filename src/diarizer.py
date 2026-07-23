@@ -216,7 +216,19 @@ class SpeakerDiarizer:
         # Keep customer audio out of optional package telemetry by default.
         os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
         import torch
+        # PyTorch 2.6+ safely defaults checkpoint loading to
+        # ``weights_only=True``. The official pyannote segmentation-3.0
+        # checkpoint contains TorchVersion metadata, so allowlist that one
+        # inert framework value instead of disabling safe loading for the
+        # entire checkpoint.
         from pyannote.audio import Pipeline
+        from pyannote.audio.core.task import Problem, Resolution, Specifications
+        from torch.torch_version import TorchVersion
+
+        if hasattr(torch.serialization, "add_safe_globals"):
+            torch.serialization.add_safe_globals(
+                [TorchVersion, Specifications, Problem, Resolution]
+            )
 
         print(
             f"[SpeakerDiarizer] loading {self.model_id} on {device}...",

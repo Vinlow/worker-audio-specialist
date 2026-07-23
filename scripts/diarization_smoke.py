@@ -13,7 +13,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 
@@ -40,9 +40,43 @@ class DiarizationSmoke:
         parser.add_argument("--output", required=True, type=Path)
         parser.add_argument("--dotenv", type=Path)
         parser.add_argument("--hf-home", type=Path)
+        parser.add_argument("--words-json", type=Path)
+        parser.add_argument("--window-start-sec", type=float, default=0.0)
+        parser.add_argument("--window-end-sec", type=float)
         parser.add_argument("--min-speakers", type=int)
         parser.add_argument("--max-speakers", type=int)
         return parser.parse_args()
+
+    @classmethod
+    def _load_words(
+        cls,
+        path: Path,
+        window_start_sec: float,
+        window_end_sec: float | None,
+    ) -> List[Dict[str, Any]]:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        candidates = raw.get("words") if isinstance(raw, dict) else raw
+        if not isinstance(candidates, list):
+            raise ValueError("words JSON must be an array or an object with words")
+        output: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            start = candidate.get("start")
+            end = candidate.get("end")
+            if not isinstance(start, (int, float)) or not isinstance(
+                end, (int, float)
+            ):
+                continue
+            if start < window_start_sec:
+                continue
+            if window_end_sec is not None and end > window_end_sec:
+                continue
+            projected = dict(candidate)
+            projected["start"] = float(start) - window_start_sec
+            projected["end"] = float(end) - window_start_sec
+            output.append(projected)
+        return output
 
     @classmethod
     def run(cls) -> int:
@@ -58,9 +92,29 @@ class DiarizationSmoke:
             os.environ["HF_HOME"] = str(args.hf_home.resolve())
         os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
 
+        words: List[Dict[str, Any]] = []
+        words_source: Dict[str, Any] | None = None
+        if args.words_json:
+            words_path = args.words_json.resolve()
+            if not words_path.is_file():
+                raise FileNotFoundError(words_path)
+            words = cls._load_words(
+                words_path,
+                args.window_start_sec,
+                args.window_end_sec,
+            )
+            words_source = {
+                "path": str(words_path),
+                "sha256": cls._sha256(words_path),
+                "bytes": words_path.stat().st_size,
+                "selected_word_count": len(words),
+                "window_start_sec": args.window_start_sec,
+                "window_end_sec": args.window_end_sec,
+            }
+
         sidecar = SpeakerDiarizer().diarize(
             str(audio),
-            [],
+            words,
             min_speakers=args.min_speakers,
             max_speakers=args.max_speakers,
         )
@@ -71,6 +125,7 @@ class DiarizationSmoke:
                 "sha256": cls._sha256(audio),
                 "bytes": audio.stat().st_size,
             },
+            **({"words_source": words_source} if words_source else {}),
             "sidecar": sidecar,
         }
         output.parent.mkdir(parents=True, exist_ok=True)
