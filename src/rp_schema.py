@@ -109,6 +109,21 @@ INPUT_VALIDATIONS = {
         'required': False,
         'default': False
     },
+    'diarize': {
+        'type': bool,
+        'required': False,
+        'default': False
+    },
+    'diarize_min_speakers': {
+        'type': int,
+        'required': False,
+        'default': 0
+    },
+    'diarize_max_speakers': {
+        'type': int,
+        'required': False,
+        'default': 0
+    },
     # clap_queries is handled separately in rp_handler.py
     # (rp_validator doesn't support dict type validation)
 }

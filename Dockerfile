@@ -35,6 +35,12 @@ RUN apt-get update -y && \
 # torchaudio is now required — used by aligner.py for the WAV2VEC2_ASR_LARGE_LV60K_960H
 # pipeline that re-times Whisper word_timestamps with sub-50ms accuracy.
 #
+# The opt-in diarization sidecar intentionally uses pyannote.audio 3.3.2 +
+# speaker-diarization-3.1 first. That pair supports this exact torch/torchaudio
+# stack, so the experiment does not turn into a Whisper/alignment dependency
+# migration. Community-1 requires torch >=2.8 and is a separate future
+# challenger, not part of this protected spike.
+#
 # 2026-05-23: pinned to torch==2.7.1 / torchaudio==2.7.1 on cu128 wheels.
 # Unpinned cu124 worked through ~2026-05-21, then RunPod silently started
 # routing "AMPERE_24" jobs to NVIDIA RTX PRO 6000 Blackwell MIG slices

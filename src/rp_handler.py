@@ -634,6 +634,9 @@ def run_whisper_job(job):
                 word_timestamps=job_input["word_timestamps"],
                 clap_queries=job_input.get("clap_queries"),
                 force_align=job_input.get("force_align", False),
+                diarize=job_input.get("diarize", False),
+                diarize_min_speakers=job_input.get("diarize_min_speakers") or None,
+                diarize_max_speakers=job_input.get("diarize_max_speakers") or None,
             )
     finally:
         # Always clean up job artifacts — success, MEDIA_FETCH_FAILED return, or
