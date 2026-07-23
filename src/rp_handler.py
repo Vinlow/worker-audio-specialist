@@ -330,6 +330,12 @@ def run_final_span_stream_job(job, job_input, span_stream):
                     word_timestamps=job_input["word_timestamps"],
                     clap_queries=job_input.get("clap_queries"),
                     force_align=job_input.get("force_align", False),
+                    # Final spans are the authoritative incremental transcript
+                    # tier. Keep draft ticker latency unchanged, but allow the
+                    # same opt-in speaker sidecar as classic jobs here.
+                    diarize=job_input.get("diarize", False),
+                    diarize_min_speakers=job_input.get("diarize_min_speakers") or None,
+                    diarize_max_speakers=job_input.get("diarize_max_speakers") or None,
                 )
             whisper_results["span_index"] = span_index
             whisper_results["start_sec"] = start_sec
