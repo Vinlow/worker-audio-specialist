@@ -43,6 +43,10 @@ from model_load_lock import serialized_model_load
 from torchaudio.pipelines import WAV2VEC2_ASR_LARGE_LV60K_960H as BUNDLE
 
 
+ALIGNMENT_SCHEMA_VERSION = "w2l-forced-alignment-v1"
+ALIGNMENT_MODEL_ID = "torchaudio/WAV2VEC2_ASR_LARGE_LV60K_960H"
+ALIGNMENT_SUPPORTED_LANGUAGES = frozenset({"en"})
+
 # CTC vocab for the model. Includes A-Z, ', |, and a few special tokens.
 # Blank is at index 0 in this model's vocab.
 BLANK_IDX = 0
@@ -149,6 +153,32 @@ class Wav2Vec2Aligner:
         self.word_separator_idx = None
 
     @staticmethod
+    def normalize_language_code(language_code: Optional[str]) -> Optional[str]:
+        """Normalize BCP-47-ish codes to the aligner's primary language key."""
+        if not isinstance(language_code, str):
+            return None
+        normalized = language_code.strip().lower().replace("_", "-")
+        if not normalized:
+            return None
+        return normalized.split("-", 1)[0]
+
+    @classmethod
+    def supports_language(cls, language_code: Optional[str]) -> bool:
+        return (
+            cls.normalize_language_code(language_code)
+            in ALIGNMENT_SUPPORTED_LANGUAGES
+        )
+
+    @staticmethod
+    def _fallback_word(word: dict, reason: str) -> dict:
+        fallback = dict(word)
+        fallback["alignment_status"] = "FALLBACK_UNALIGNED"
+        fallback["alignment_authority"] = False
+        fallback["alignment_model_id"] = ALIGNMENT_MODEL_ID
+        fallback["alignment_reason"] = reason
+        return fallback
+
+    @staticmethod
     def normalize_word(word: str) -> str:
         """Strip non-alpha (keep apostrophe), uppercase. Returns "" if no chars."""
         return re.sub(r"[^A-Za-z']", "", word).upper()
@@ -157,6 +187,7 @@ class Wav2Vec2Aligner:
         self,
         audio_path: str,
         words: List[dict],
+        language_code: str = "en",
         chunk_sec: float = 60.0,
         overlap_sec: float = 5.0,
     ) -> List[dict]:
@@ -184,6 +215,12 @@ class Wav2Vec2Aligner:
         edge anchor there and are written by the next chunk, which contains
         them mid-chunk thanks to the overlap.
         """
+        normalized_language = self.normalize_language_code(language_code)
+        if normalized_language not in ALIGNMENT_SUPPORTED_LANGUAGES:
+            raise ValueError(
+                f"{ALIGNMENT_MODEL_ID} does not support alignment language "
+                f"{language_code!r}"
+            )
         if not words:
             return words
         if self.model is None:
@@ -268,7 +305,10 @@ class Wav2Vec2Aligner:
                     # original whisper timing; contributes nothing as an anchor.
                     if aligned[words_idx] is None:
                         words_unalignable += 1
-                        aligned[words_idx] = w
+                        aligned[words_idx] = self._fallback_word(
+                            w,
+                            "NO_MODEL_VOCABULARY",
+                        )
                     writable.discard(words_idx)
                     continue
                 word_char_counts.append((n_chars_added, words_idx, w["word"]))
@@ -345,7 +385,10 @@ class Wav2Vec2Aligner:
                     # to absorb its speech in the CTC path.
                     continue
                 if not spans_for_word:
-                    aligned[words_idx] = words[words_idx]
+                    aligned[words_idx] = self._fallback_word(
+                        words[words_idx],
+                        "NO_TOKEN_SPAN",
+                    )
                     continue
                 start_frame = spans_for_word[0].start
                 end_frame = spans_for_word[-1].end
@@ -393,6 +436,10 @@ class Wav2Vec2Aligner:
                 # or [end, offset_end] without slicing mid-phoneme.
                 new_word["onset_start"] = float(abs_onset)
                 new_word["offset_end"] = float(abs_offset)
+                new_word["alignment_status"] = "ALIGNED_SUPPORTED"
+                new_word["alignment_authority"] = True
+                new_word["alignment_model_id"] = ALIGNMENT_MODEL_ID
+                new_word["alignment_language"] = normalized_language
                 aligned[words_idx] = new_word
                 words_aligned += 1
 
@@ -403,7 +450,10 @@ class Wav2Vec2Aligner:
         # Any words not aligned (off the end, between chunk overlaps) keep originals
         for i, w in enumerate(words):
             if aligned[i] is None:
-                aligned[i] = w
+                aligned[i] = self._fallback_word(
+                    w,
+                    "NO_COMPLETE_ALIGNMENT",
+                )
 
         print(
             f"[Wav2Vec2Aligner] aligned {words_aligned}/{len(words)} words "

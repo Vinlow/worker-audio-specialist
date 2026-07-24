@@ -50,7 +50,7 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 | `translate` | bool | Translate to English. Default: `false` |
 | `language` | str | Language code, or `null` for auto-detection. Default: `null` |
 | `word_timestamps` | bool | Include per-word timestamps and probability. Default: `false` |
-| `force_align` | bool | Re-time `word_timestamps` via wav2vec2 CTC forced alignment (sub-50ms accuracy) and add `onset_start`/`offset_end` silence-run boundaries per word. Requires `word_timestamps: true`. English-only model. Default: `false` |
+| `force_align` | bool | Re-time supported-language `word_timestamps` via wav2vec2 CTC alignment and add per-word `onset_start`/`offset_end` evidence. Requires `word_timestamps: true`. The current model supports English only; unsupported languages fail soft with an explicit status. Default: `false` |
 | `diarize` | bool | Experimental speaker diarization sidecar. Requires `word_timestamps: true` for word attribution. Default: `false` |
 | `diarize_min_speakers` | int | Optional minimum speaker hint. `0` means automatic. |
 | `diarize_max_speakers` | int | Optional maximum speaker hint. `0` means automatic. |
@@ -98,25 +98,52 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 }
 ```
 
-With `force_align: true`, `start`/`end` are re-timed against the audio and each
-aligned word additionally carries NP-SBV2 silence-run boundaries — the render
-layer can cut anywhere in `[onset_start, start]` or `[end, offset_end]` without
-slicing mid-phoneme. The top-level flag `word_timestamps_aligned: true` is set
-so callers can detect a pre-alignment worker:
+With `force_align: true`, supported-language words are re-timed against the
+audio and each aligned word additionally carries NP-SBV2 silence-run
+boundaries. The render layer can cut anywhere in `[onset_start, start]` or
+`[end, offset_end]` without slicing mid-phoneme. The current
+`WAV2VEC2_ASR_LARGE_LV60K_960H` model is English-only. Unsupported languages
+keep their exact Whisper geometry and return
+`alignment.status: "UNSUPPORTED_LANGUAGE"` rather than a false alignment
+claim.
+
+Every attempted alignment returns a typed top-level summary. Authority remains
+per word because numbers, symbols, edge words, or failed CTC chunks may retain
+Whisper timing:
 
 ```json
 {
   "word_timestamps_aligned": true,
+  "alignment": {
+    "schema_version": "w2l-forced-alignment-v1",
+    "status": "PARTIAL",
+    "model_id": "torchaudio/WAV2VEC2_ASR_LARGE_LV60K_960H",
+    "detected_language": "en",
+    "supported_languages": ["en"],
+    "total_words": 2,
+    "aligned_words": 1,
+    "fallback_words": 1,
+    "aligned_word_fraction": 0.5,
+    "per_word_authority": true,
+    "transcript_geometry_mutated": false
+  },
   "word_timestamps": [
     { "word": "Four", "start": 0.05, "end": 0.31, "probability": 0.98,
-      "onset_start": 0.01, "offset_end": 0.38 }
+      "onset_start": 0.01, "offset_end": 0.38,
+      "alignment_status": "ALIGNED_SUPPORTED",
+      "alignment_authority": true },
+    { "word": "2026", "start": 0.40, "end": 0.72, "probability": 0.96,
+      "alignment_status": "FALLBACK_UNALIGNED",
+      "alignment_authority": false,
+      "alignment_reason": "NO_MODEL_VOCABULARY" }
   ]
 }
 ```
 
-Words the aligner can't handle (no A-Z/' chars after normalization, too close
-to the start/end of the file) keep their original Whisper timing and have no
-`onset_start`/`offset_end` — consumers must fall back to a fixed pad for those.
+Words the aligner cannot handle keep their original Whisper timing and have no
+`onset_start`/`offset_end`. An alignment load or inference failure is fail-soft:
+the already-valid Whisper transcript is returned with
+`alignment.status: "FAILED"` and `word_timestamps_aligned: false`.
 
 ### Speaker diarization sidecar (experimental)
 

@@ -19,7 +19,12 @@ from faster_whisper import WhisperModel
 from faster_whisper.utils import format_timestamp
 from diarizer import SpeakerDiarizer
 from clap_scorer import ClapScorer
-from aligner import Wav2Vec2Aligner
+from aligner import (
+    ALIGNMENT_MODEL_ID,
+    ALIGNMENT_SCHEMA_VERSION,
+    ALIGNMENT_SUPPORTED_LANGUAGES,
+    Wav2Vec2Aligner,
+)
 from hf_auth import normalize_hf_token_env
 
 def parse_suppress_tokens(raw):
@@ -297,18 +302,107 @@ class Predictor:
                 # (sub-50ms accuracy vs Whisper's 100-300ms cross-attention timing).
                 # Only runs if explicitly requested via force_align: true input.
                 if force_align and word_timestamps_list:
-                    print(
-                        f"[Predictor] Running wav2vec2 forced alignment on "
-                        f"{len(word_timestamps_list)} words..."
+                    detected_alignment_language = (
+                        self.aligner.normalize_language_code(info.language)
                     )
-                    device = "cuda" if rp_cuda.is_available() else "cpu"
-                    self.aligner.setup(device=device)
-                    aligned_list = self.aligner.align(str(audio), word_timestamps_list)
-                    # Replace the original timestamps with the aligned ones.
-                    # The original (cross-attention) timing is gone — if you want both,
-                    # this is where to add a `word_timestamps_original` field.
-                    results["word_timestamps"] = aligned_list
-                    results["word_timestamps_aligned"] = True  # flag so callers know
+                    alignment_evidence = {
+                        "schema_version": ALIGNMENT_SCHEMA_VERSION,
+                        "status": "UNVERIFIED",
+                        "model_id": ALIGNMENT_MODEL_ID,
+                        "detected_language": detected_alignment_language,
+                        "supported_languages": sorted(
+                            ALIGNMENT_SUPPORTED_LANGUAGES
+                        ),
+                        "total_words": len(word_timestamps_list),
+                        "aligned_words": 0,
+                        "fallback_words": len(word_timestamps_list),
+                        "aligned_word_fraction": 0.0,
+                        "per_word_authority": False,
+                        "transcript_geometry_mutated": False,
+                    }
+
+                    if not self.aligner.supports_language(
+                        detected_alignment_language
+                    ):
+                        print(
+                            "[Predictor] Skipping wav2vec2 forced alignment: "
+                            f"{ALIGNMENT_MODEL_ID} does not support detected "
+                            f"language {detected_alignment_language!r}",
+                            flush=True,
+                        )
+                        alignment_evidence["status"] = (
+                            "UNSUPPORTED_LANGUAGE"
+                        )
+                        results["word_timestamps_aligned"] = False
+                        results["alignment"] = alignment_evidence
+                    else:
+                        original_words = word_timestamps_list
+                        try:
+                            print(
+                                f"[Predictor] Running wav2vec2 forced alignment on "
+                                f"{len(word_timestamps_list)} words..."
+                            )
+                            device = (
+                                "cuda" if rp_cuda.is_available() else "cpu"
+                            )
+                            self.aligner.setup(device=device)
+                            aligned_list = self.aligner.align(
+                                str(audio),
+                                word_timestamps_list,
+                                language_code=detected_alignment_language,
+                            )
+                        except Exception as error:
+                            # Whisper already produced a valid transcript.
+                            # Alignment is optional enrichment and must never
+                            # destroy or replay that paid work.
+                            print(
+                                "[Predictor] Forced alignment failed; "
+                                f"preserving Whisper geometry: {type(error).__name__}",
+                                flush=True,
+                            )
+                            alignment_evidence["status"] = "FAILED"
+                            alignment_evidence["failure_type"] = type(
+                                error
+                            ).__name__
+                            results["word_timestamps"] = original_words
+                            results["word_timestamps_aligned"] = False
+                            results["alignment"] = alignment_evidence
+                        else:
+                            aligned_words = sum(
+                                1
+                                for word in aligned_list
+                                if word.get("alignment_status")
+                                == "ALIGNED_SUPPORTED"
+                                and word.get("alignment_authority") is True
+                            )
+                            fallback_words = (
+                                len(aligned_list) - aligned_words
+                            )
+                            alignment_evidence.update(
+                                {
+                                    "status": (
+                                        "ALIGNED_SUPPORTED"
+                                        if fallback_words == 0
+                                        else "PARTIAL"
+                                    ),
+                                    "aligned_words": aligned_words,
+                                    "fallback_words": fallback_words,
+                                    "aligned_word_fraction": (
+                                        aligned_words / len(aligned_list)
+                                        if aligned_list
+                                        else 0.0
+                                    ),
+                                    "per_word_authority": aligned_words > 0,
+                                }
+                            )
+                            # Replace timing only with the aligner's
+                            # source-word-conserving output. Every fallback word
+                            # retains its original Whisper geometry.
+                            results["word_timestamps"] = aligned_list
+                            results["word_timestamps_aligned"] = (
+                                aligned_words > 0
+                            )
+                            results["alignment"] = alignment_evidence
 
             # Speaker diarization is an OPTIONAL, versioned sidecar. It runs
             # only after the final Whisper/wav2vec2 word list exists and never
