@@ -20,7 +20,8 @@ from hf_auth import hf_from_pretrained_kwargs
 from model_load_lock import serialized_model_load
 
 
-PARAKEET_SCHEMA_VERSION = "w2l-parakeet-tdt-probe-v1"
+PARAKEET_SCHEMA_VERSION = "w2l-parakeet-tdt-probe-v2"
+PARAKEET_MODEL_DTYPE = "auto"
 PARAKEET_MODEL_ID = "nvidia/parakeet-tdt-0.6b-v3"
 PARAKEET_MODEL_REVISION = "7c35754d166cca382ad1e53e68b01e7c575f3a1d"
 PARAKEET_TRANSFORMERS_VERSION = "5.9.0"
@@ -280,7 +281,6 @@ class ParakeetTranscriber:
                         f"{transformers.__version__}"
                     )
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-                dtype = torch.float16 if device == "cuda" else torch.float32
                 pretrained_kwargs = {
                     "revision": PARAKEET_MODEL_REVISION,
                     "local_files_only": True,
@@ -297,7 +297,11 @@ class ParakeetTranscriber:
                 )
                 model = AutoModelForTDT.from_pretrained(
                     PARAKEET_MODEL_ID,
-                    dtype=dtype,
+                    # Keep the model-declared dtype.  The pinned v3 checkpoint
+                    # declares float32; silently forcing fp16 produced a
+                    # materially different inference route from NVIDIA's
+                    # official Transformers example.
+                    dtype=PARAKEET_MODEL_DTYPE,
                     **pretrained_kwargs,
                 )
                 model = model.to(device).eval()
@@ -418,6 +422,10 @@ class ParakeetTranscriber:
                     "model_revision": PARAKEET_MODEL_REVISION,
                     "framework": "transformers",
                     "framework_version": PARAKEET_TRANSFORMERS_VERSION,
+                    "model_dtype": str(self.model.dtype).removeprefix(
+                        "torch."
+                    ),
+                    "model_dtype_selection": PARAKEET_MODEL_DTYPE,
                     "supported_languages": sorted(
                         PARAKEET_SUPPORTED_LANGUAGES
                     ),

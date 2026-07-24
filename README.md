@@ -109,7 +109,9 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 
 Parakeet is selected only by sending `"asr_backend": "parakeet"`. The image
 contains the exact model revision and runtime inference is
-`local_files_only`. Its native token durations are deterministically
+`local_files_only`. Loading uses the model-declared dtype (`"auto"`; the
+pinned v3 checkpoint declares float32) rather than silently forcing fp16.
+The actual runtime dtype is returned in `asr_backend_evidence`. Its native token durations are deterministically
 coalesced into word timestamps, but they are **not** NP-SBV2 or Natural
 Landing cut authority:
 

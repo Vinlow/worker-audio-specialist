@@ -1,6 +1,7 @@
 import unittest
 
 from parakeet_transcriber import (
+    PARAKEET_MODEL_DTYPE,
     extract_model_language,
     normalize_language_code,
     strip_control_tokens,
@@ -19,6 +20,9 @@ class _FakeTokenizer:
 
 
 class ParakeetTranscriberContractTest(unittest.TestCase):
+    def test_uses_model_declared_dtype_instead_of_forcing_fp16(self):
+        self.assertEqual(PARAKEET_MODEL_DTYPE, "auto")
+
     def test_language_support_is_explicit_and_primary_subtag_aware(self):
         self.assertEqual(normalize_language_code("de-DE"), "de")
         self.assertTrue(supports_language("de-DE"))
