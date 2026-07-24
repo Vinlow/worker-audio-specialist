@@ -5,6 +5,7 @@ from pathlib import Path
 
 HANDLER_PATH = Path(__file__).with_name("rp_handler.py")
 PREDICT_PATH = Path(__file__).with_name("predict.py")
+FETCH_MODELS_PATH = Path(__file__).parent.parent / "builder" / "fetch_models.py"
 
 
 def function_from_file(path, function_name):
@@ -18,6 +19,23 @@ def function_from_file(path, function_name):
 
 
 class SaTPunctuationRoutingTest(unittest.TestCase):
+    def test_skops_preloads_before_transformers_backed_modules(self):
+        module_text = PREDICT_PATH.read_text(encoding="utf-8")
+        skops_import = module_text.index("import skops.io")
+        clap_import = module_text.index("from clap_scorer import")
+        parakeet_import = module_text.index(
+            "from parakeet_transcriber import"
+        )
+        self.assertLess(skops_import, clap_import)
+        self.assertLess(skops_import, parakeet_import)
+
+        builder_text = FETCH_MODELS_PATH.read_text(encoding="utf-8")
+        builder_skops = builder_text.index("import skops.io")
+        builder_transformers = builder_text.index(
+            "from transformers import"
+        )
+        self.assertLess(builder_skops, builder_transformers)
+
     def test_probe_is_explicit_and_returns_before_audio_requirement(self):
         method = function_from_file(HANDLER_PATH, "run_whisper_job")
         method_text = ast.unparse(method)

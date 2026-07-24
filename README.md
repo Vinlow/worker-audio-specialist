@@ -159,6 +159,9 @@ probability and strict-threshold `PERIOD`/`NONE` label. Language is
 caller-asserted and explicitly not model-verified. Every authority flag is
 false: this endpoint is evidence, not transcript, geometry, Natural Landing,
 NP-SBV2, cut, or production authority. Invalid identity fails closed.
+The image pins `wtpsplit==2.2.1`, its import-order dependency
+`skops==0.14.0`, and `transformers==5.9.0`; all three versions are checked at
+probe load.
 
 With `force_align: true`, supported-language words are re-timed against the
 audio and each aligned word additionally carries NP-SBV2 silence-run

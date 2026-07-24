@@ -26,6 +26,7 @@ SAT_MODEL_REVISION = "137da054051ad9f1eac42025f758db4ac9f22535"
 SAT_TOKENIZER_ID = "FacebookAI/xlm-roberta-base"
 SAT_TOKENIZER_REVISION = "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089"
 SAT_WTPSPLIT_VERSION = "2.2.1"
+SAT_SKOPS_VERSION = "0.14.0"
 SAT_TRANSFORMERS_VERSION = "5.9.0"
 SAT_BOUNDARY_THRESHOLD = 0.65
 SAT_MAX_LENGTH_TOKENS = 512
@@ -250,11 +251,17 @@ class SaTPunctuator:
                 if self.sat is not None:
                     return
                 import torch
-                import transformers
+                import skops
                 import wtpsplit
+                import transformers
                 from huggingface_hub import snapshot_download
                 from wtpsplit import SaT
 
+                if skops.__version__ != SAT_SKOPS_VERSION:
+                    raise RuntimeError(
+                        "SaT runtime requires skops "
+                        f"{SAT_SKOPS_VERSION}, found {skops.__version__}"
+                    )
                 if wtpsplit.__version__ != SAT_WTPSPLIT_VERSION:
                     raise RuntimeError(
                         "SaT runtime requires wtpsplit "
@@ -427,6 +434,7 @@ class SaTPunctuator:
                 },
                 "implementation": {
                     "wtpsplitVersion": SAT_WTPSPLIT_VERSION,
+                    "skopsVersion": SAT_SKOPS_VERSION,
                     "transformersVersion": SAT_TRANSFORMERS_VERSION,
                     "snapshot": self.snapshot,
                     "languageAuthority": (

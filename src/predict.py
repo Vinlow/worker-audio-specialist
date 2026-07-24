@@ -13,6 +13,14 @@ import gc
 import threading
 import numpy as np
 
+# wtpsplit requires skops to initialize before any Transformers-backed module.
+# The dependency is guaranteed in the worker image; the narrow fallback keeps
+# lightweight AST/unit environments able to import ordinary Whisper code.
+try:
+    import skops.io as _skops_io  # noqa: F401
+except ModuleNotFoundError:
+    _skops_io = None
+
 from runpod.serverless.utils import rp_cuda
 
 from faster_whisper import WhisperModel

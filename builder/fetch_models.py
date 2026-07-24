@@ -2,6 +2,12 @@ import gc
 import inspect
 import os
 
+# wtpsplit 2.2.1 deliberately initializes skops before Transformers. Skops
+# enumerates trusted types at import time; reversing the order can force
+# Transformers' unrelated lazy vision modules (and optional torchvision) into
+# this text-only image. Keep this as the first third-party import.
+import skops.io as _skops_io  # noqa: F401
+
 from faster_whisper.utils import download_model
 from huggingface_hub import snapshot_download
 

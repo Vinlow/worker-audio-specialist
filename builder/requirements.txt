@@ -13,6 +13,9 @@ librosa>=0.10.0,<1
 # Experimental, request-explicit Starforge sentence-boundary probe. The exact
 # model and tokenizer snapshots are downloaded and constructed during build;
 # ordinary Whisper/Parakeet requests never load it.
+# wtpsplit imports skops before Transformers by contract; pin the preloader so
+# a future transitive release cannot silently change worker startup.
+skops==0.14.0
 wtpsplit==2.2.1
 
 # Wav2vec2 forced alignment for sub-50ms word-level timestamps.
