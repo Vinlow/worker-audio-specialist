@@ -21,6 +21,12 @@ from model_load_lock import serialized_model_load
 
 SAT_REQUEST_SCHEMA_VERSION = "w2l-sat-punctuation-window-request-v1"
 SAT_RESPONSE_SCHEMA_VERSION = "w2l-sat-punctuation-window-probe-v1"
+SAT_BATCH_REQUEST_SCHEMA_VERSION = (
+    "w2l-sat-punctuation-batch-request-v1"
+)
+SAT_BATCH_RESPONSE_SCHEMA_VERSION = (
+    "w2l-sat-punctuation-batch-probe-v1"
+)
 SAT_MODEL_ID = "segment-any-text/sat-3l-sm"
 SAT_MODEL_REVISION = "137da054051ad9f1eac42025f758db4ac9f22535"
 SAT_TOKENIZER_ID = "FacebookAI/xlm-roberta-base"
@@ -196,6 +202,107 @@ def validate_probe_request(value) -> dict:
     }
 
 
+def validate_batch_request(value) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("sat_punctuation_batch_probe must be an object")
+    if value.get("schemaVersion") != SAT_BATCH_REQUEST_SCHEMA_VERSION:
+        raise ValueError("unsupported SaT punctuation batch request schema")
+    windows = value.get("windows")
+    if (
+        not isinstance(windows, list)
+        or not windows
+        or len(windows) > SAT_PADDED_BATCH_SIZE
+    ):
+        raise ValueError(
+            "SaT punctuation batch must contain between one and "
+            f"{SAT_PADDED_BATCH_SIZE} windows"
+        )
+
+    normalized = []
+    previous_start = -1
+    previous_complete_start = None
+    observed_ordinals = set()
+    previous_global_ordinal = -1
+    terminal_tail_count = 0
+    for batch_index, window_payload in enumerate(windows):
+        if not isinstance(window_payload, dict):
+            raise ValueError(
+                f"SaT punctuation batch window {batch_index} is not an object"
+            )
+        unexpected_keys = set(window_payload) - {
+            "window",
+            "inputTokenIds",
+            "inputTokenSha256",
+            "terminalAnchors",
+        }
+        if unexpected_keys:
+            raise ValueError(
+                "SaT punctuation batch window contains unexpected keys: "
+                + ", ".join(sorted(str(key) for key in unexpected_keys))
+            )
+        single = validate_probe_request(
+            {
+                **window_payload,
+                "schemaVersion": SAT_REQUEST_SCHEMA_VERSION,
+                "sourceFingerprint": value.get("sourceFingerprint"),
+                "language": value.get("language"),
+                "candidate": value.get("candidate"),
+            }
+        )
+        start = single["window"]["startToken"]
+        if start <= previous_start:
+            raise ValueError(
+                "SaT punctuation batch windows must have strictly "
+                "increasing start tokens"
+            )
+        previous_start = start
+        is_tail = single["window"]["terminalTail"]
+        if is_tail:
+            terminal_tail_count += 1
+            if batch_index != len(windows) - 1:
+                raise ValueError(
+                    "SaT punctuation terminal tail must be the final "
+                    "batch window"
+                )
+        else:
+            if (
+                previous_complete_start is not None
+                and start != previous_complete_start + SAT_STRIDE_TOKENS
+            ):
+                raise ValueError(
+                    "SaT punctuation complete batch windows must be "
+                    "consecutive on the source grid"
+                )
+            previous_complete_start = start
+        for anchor in single["terminalAnchors"]:
+            ordinal = anchor["ordinal"]
+            if ordinal in observed_ordinals:
+                raise ValueError(
+                    "SaT punctuation batch contains a duplicate "
+                    f"terminal ordinal: {ordinal}"
+                )
+            if ordinal <= previous_global_ordinal:
+                raise ValueError(
+                    "SaT punctuation batch terminal ordinals must follow "
+                    "global source order"
+                )
+            observed_ordinals.add(ordinal)
+            previous_global_ordinal = ordinal
+        normalized.append(single)
+    if terminal_tail_count > 1:
+        raise ValueError(
+            "SaT punctuation batch accepts at most one terminal tail"
+        )
+
+    return {
+        "schemaVersion": SAT_BATCH_REQUEST_SCHEMA_VERSION,
+        "sourceFingerprint": normalized[0]["sourceFingerprint"],
+        "language": normalized[0]["language"],
+        "candidate": normalized[0]["candidate"],
+        "windows": normalized,
+    }
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -331,17 +438,41 @@ class SaTPunctuator:
                     flush=True,
                 )
 
-    def infer_window(self, request) -> dict:
-        normalized = validate_probe_request(request)
+    def _authority(self) -> dict:
+        return {
+            "punctuation": False,
+            "transcript": False,
+            "wordGeometry": False,
+            "naturalLanding": False,
+            "npSbv2": False,
+            "cut": False,
+            "production": False,
+        }
+
+    def _implementation(self) -> dict:
+        return {
+            "wtpsplitVersion": SAT_WTPSPLIT_VERSION,
+            "skopsVersion": SAT_SKOPS_VERSION,
+            "transformersVersion": SAT_TRANSFORMERS_VERSION,
+            "snapshot": self.snapshot,
+            "languageAuthority": "CALLER_ASSERTED_NOT_MODEL_VERIFIED",
+        }
+
+    def _infer_normalized_windows(self, normalized_windows):
+        if (
+            not normalized_windows
+            or len(normalized_windows) > SAT_PADDED_BATCH_SIZE
+        ):
+            raise ValueError(
+                "SaT inference requires between one and "
+                f"{SAT_PADDED_BATCH_SIZE} normalized windows"
+            )
         with self._inference_lock:
             self.setup()
             import numpy as np
             import torch
             from wtpsplit.utils import Constants
 
-            input_token_ids = normalized["inputTokenIds"]
-            if max(input_token_ids) >= self.sat.tokenizer.vocab_size:
-                raise ValueError("SaT punctuation token id exceeds vocabulary")
             cls_token_id = self.sat.tokenizer.cls_token_id
             sep_token_id = self.sat.tokenizer.sep_token_id
             pad_token_id = self.sat.tokenizer.pad_token_id
@@ -357,13 +488,25 @@ class SaTPunctuator:
                 (SAT_PADDED_BATCH_SIZE, SAT_MAX_LENGTH_TOKENS),
                 dtype=np.float32,
             )
-            batch_input_ids[0, 0] = int(cls_token_id)
-            batch_input_ids[0, 1 : 1 + len(input_token_ids)] = np.asarray(
-                input_token_ids,
-                dtype=np.int64,
-            )
-            batch_input_ids[0, 1 + len(input_token_ids)] = int(sep_token_id)
-            batch_attention_mask[0, : len(input_token_ids) + 2] = 1.0
+            for batch_index, normalized in enumerate(normalized_windows):
+                input_token_ids = normalized["inputTokenIds"]
+                if max(input_token_ids) >= self.sat.tokenizer.vocab_size:
+                    raise ValueError(
+                        "SaT punctuation token id exceeds vocabulary"
+                    )
+                batch_input_ids[batch_index, 0] = int(cls_token_id)
+                batch_input_ids[
+                    batch_index,
+                    1 : 1 + len(input_token_ids),
+                ] = np.asarray(input_token_ids, dtype=np.int64)
+                batch_input_ids[
+                    batch_index,
+                    1 + len(input_token_ids),
+                ] = int(sep_token_id)
+                batch_attention_mask[
+                    batch_index,
+                    : len(input_token_ids) + 2,
+                ] = 1.0
 
             if self.device == "cuda":
                 torch.cuda.synchronize(self.device)
@@ -377,77 +520,110 @@ class SaTPunctuator:
                 torch.cuda.synchronize(self.device)
             inference_seconds = time.perf_counter() - started
 
-            token_logits = logits[
-                0,
-                1 : 1 + len(input_token_ids),
-                Constants.NEWLINE_INDEX,
-            ].astype(np.float64)
-            probabilities = 1.0 / (
-                1.0 + np.exp(-np.clip(token_logits, -30.0, 30.0))
-            )
-            start_token = normalized["window"]["startToken"]
-            rows = []
-            for anchor in normalized["terminalAnchors"]:
-                local_index = anchor["terminalTokenIndex"] - start_token
-                probability = float(probabilities[local_index])
-                rows.append(
+            window_results = []
+            for batch_index, normalized in enumerate(normalized_windows):
+                input_token_ids = normalized["inputTokenIds"]
+                token_logits = logits[
+                    batch_index,
+                    1 : 1 + len(input_token_ids),
+                    Constants.NEWLINE_INDEX,
+                ].astype(np.float64)
+                probabilities = 1.0 / (
+                    1.0 + np.exp(-np.clip(token_logits, -30.0, 30.0))
+                )
+                start_token = normalized["window"]["startToken"]
+                rows = []
+                for anchor in normalized["terminalAnchors"]:
+                    local_index = (
+                        anchor["terminalTokenIndex"] - start_token
+                    )
+                    probability = float(probabilities[local_index])
+                    rows.append(
+                        {
+                            **anchor,
+                            "localTokenIndex": local_index,
+                            "terminalProbability": probability,
+                            "rawModelLabel": (
+                                "PERIOD"
+                                if probability > SAT_BOUNDARY_THRESHOLD
+                                else "NONE"
+                            ),
+                        }
+                    )
+
+                identity_body = {
+                    "schemaVersion": SAT_RESPONSE_SCHEMA_VERSION,
+                    "sourceFingerprint": normalized[
+                        "sourceFingerprint"
+                    ],
+                    "language": normalized["language"],
+                    "candidate": normalized["candidate"],
+                    "window": normalized["window"],
+                    "inputTokenSha256": normalized[
+                        "inputTokenSha256"
+                    ],
+                    "terminalAnchors": normalized["terminalAnchors"],
+                }
+                window_results.append(
                     {
-                        **anchor,
-                        "localTokenIndex": local_index,
-                        "terminalProbability": probability,
-                        "rawModelLabel": (
-                            "PERIOD"
-                            if probability > SAT_BOUNDARY_THRESHOLD
-                            else "NONE"
-                        ),
+                        **identity_body,
+                        "windowIdentity": "sha256:"
+                        + hashlib.sha256(
+                            canonical_json(identity_body).encode("utf-8")
+                        ).hexdigest(),
+                        "rows": rows,
                     }
                 )
 
-            identity_body = {
-                "schemaVersion": SAT_RESPONSE_SCHEMA_VERSION,
-                "sourceFingerprint": normalized["sourceFingerprint"],
-                "language": normalized["language"],
-                "candidate": normalized["candidate"],
-                "window": normalized["window"],
-                "inputTokenSha256": normalized["inputTokenSha256"],
-                "terminalAnchors": normalized["terminalAnchors"],
+            runtime = {
+                "device": self.device,
+                "modelDtype": self.model_dtype,
+                "loadSeconds": self.load_seconds,
+                "inferenceSeconds": inference_seconds,
+                "cudaPeakAllocatedBytes": (
+                    int(torch.cuda.max_memory_allocated(self.device))
+                    if self.device == "cuda"
+                    else None
+                ),
+                "inputWindowCount": len(normalized_windows),
+                "paddedBatchSize": SAT_PADDED_BATCH_SIZE,
+                "maxLengthTokens": SAT_MAX_LENGTH_TOKENS,
             }
-            return {
-                **identity_body,
-                "windowIdentity": "sha256:"
-                + hashlib.sha256(
-                    canonical_json(identity_body).encode("utf-8")
-                ).hexdigest(),
-                "rows": rows,
-                "runtime": {
-                    "device": self.device,
-                    "modelDtype": self.model_dtype,
-                    "loadSeconds": self.load_seconds,
-                    "inferenceSeconds": inference_seconds,
-                    "cudaPeakAllocatedBytes": (
-                        int(torch.cuda.max_memory_allocated(self.device))
-                        if self.device == "cuda"
-                        else None
-                    ),
-                    "paddedBatchSize": SAT_PADDED_BATCH_SIZE,
-                    "maxLengthTokens": SAT_MAX_LENGTH_TOKENS,
-                },
-                "implementation": {
-                    "wtpsplitVersion": SAT_WTPSPLIT_VERSION,
-                    "skopsVersion": SAT_SKOPS_VERSION,
-                    "transformersVersion": SAT_TRANSFORMERS_VERSION,
-                    "snapshot": self.snapshot,
-                    "languageAuthority": (
-                        "CALLER_ASSERTED_NOT_MODEL_VERIFIED"
-                    ),
-                },
-                "authority": {
-                    "punctuation": False,
-                    "transcript": False,
-                    "wordGeometry": False,
-                    "naturalLanding": False,
-                    "npSbv2": False,
-                    "cut": False,
-                    "production": False,
-                },
-            }
+            return window_results, runtime
+
+    def infer_window(self, request) -> dict:
+        normalized = validate_probe_request(request)
+        windows, runtime = self._infer_normalized_windows([normalized])
+        return {
+            **windows[0],
+            "runtime": runtime,
+            "implementation": self._implementation(),
+            "authority": self._authority(),
+        }
+
+    def infer_batch(self, request) -> dict:
+        normalized = validate_batch_request(request)
+        windows, runtime = self._infer_normalized_windows(
+            normalized["windows"]
+        )
+        identity_body = {
+            "schemaVersion": SAT_BATCH_RESPONSE_SCHEMA_VERSION,
+            "sourceFingerprint": normalized["sourceFingerprint"],
+            "language": normalized["language"],
+            "candidate": normalized["candidate"],
+            "windowIdentities": [
+                window["windowIdentity"]
+                for window in windows
+            ],
+        }
+        return {
+            **identity_body,
+            "batchIdentity": "sha256:"
+            + hashlib.sha256(
+                canonical_json(identity_body).encode("utf-8")
+            ).hexdigest(),
+            "windows": windows,
+            "runtime": runtime,
+            "implementation": self._implementation(),
+            "authority": self._authority(),
+        }

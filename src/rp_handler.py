@@ -556,11 +556,21 @@ def run_whisper_job(job):
         'sat_punctuation_probe',
         None,
     )
+    raw_sat_punctuation_batch_probe = job_input.pop(
+        'sat_punctuation_batch_probe',
+        None,
+    )
 
     # RunPod serverless streaming jobs can be retried as timed out if a cold
     # worker spends too long loading models before the first stream item.
     # Emit a cheap control item immediately; Studio ignores unknown events.
-    if raw_sat_punctuation_probe is not None:
+    if raw_sat_punctuation_batch_probe is not None:
+        yield {
+            'mode': 'sat_punctuation_batch_probe',
+            'event': 'started',
+            'yield_index': -1,
+        }
+    elif raw_sat_punctuation_probe is not None:
         yield {
             'mode': 'sat_punctuation_probe',
             'event': 'started',
@@ -600,11 +610,26 @@ def run_whisper_job(job):
         }
         return
 
-    if raw_sat_punctuation_probe is not None:
+    if (
+        raw_sat_punctuation_probe is not None
+        and raw_sat_punctuation_batch_probe is not None
+    ):
+        yield {
+            'error': (
+                "sat_punctuation_probe and "
+                "sat_punctuation_batch_probe are mutually exclusive"
+            )
+        }
+        return
+
+    if (
+        raw_sat_punctuation_probe is not None
+        or raw_sat_punctuation_batch_probe is not None
+    ):
         if raw_span_stream is not None or raw_clap_queries is not None:
             yield {
                 'error': (
-                    "sat_punctuation_probe cannot be combined with "
+                    "SaT punctuation probes cannot be combined with "
                     "span_stream or clap_queries"
                 )
             }
@@ -612,14 +637,19 @@ def run_whisper_job(job):
         if job_input.get('audio') or job_input.get('audio_base64'):
             yield {
                 'error': (
-                    "sat_punctuation_probe accepts source tokens, not audio"
+                    "SaT punctuation probes accept source tokens, not audio"
                 )
             }
             return
         try:
-            result = MODEL.predict_punctuation_window(
-                raw_sat_punctuation_probe
-            )
+            if raw_sat_punctuation_batch_probe is not None:
+                result = MODEL.predict_punctuation_batch(
+                    raw_sat_punctuation_batch_probe
+                )
+            else:
+                result = MODEL.predict_punctuation_window(
+                    raw_sat_punctuation_probe
+                )
         except Exception as error:
             yield {'error': str(error)}
             return

@@ -40,12 +40,20 @@ class SaTPunctuationRoutingTest(unittest.TestCase):
         method = function_from_file(HANDLER_PATH, "run_whisper_job")
         method_text = ast.unparse(method)
         probe_call = method_text.index("MODEL.predict_punctuation_window")
+        batch_probe_call = method_text.index(
+            "MODEL.predict_punctuation_batch"
+        )
         audio_requirement = method_text.index(
             "Must provide either audio or audio_base64"
         )
         self.assertLess(probe_call, audio_requirement)
+        self.assertLess(batch_probe_call, audio_requirement)
         self.assertIn(
             "job_input.pop('sat_punctuation_probe', None)",
+            method_text,
+        )
+        self.assertIn(
+            "job_input.pop('sat_punctuation_batch_probe', None)",
             method_text,
         )
 

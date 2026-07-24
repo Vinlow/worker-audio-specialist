@@ -16,11 +16,12 @@ One upload, two signals: transcript + audio understanding. v2.
    `asr_backend: "parakeet"`) — fast punctuation-aware ASR for 25 European
    languages. It is explicit opt-in; the default and every draft path remain
    Whisper.
-6. **SaT 3L small punctuation window probe** (experimental,
-   `sat_punctuation_probe`) — accepts one exact, source-bound XLM-R token
-   window and returns diagnostic terminal-boundary probabilities. It cannot
-   rewrite transcript words or geometry and is never loaded by normal audio
-   requests.
+6. **SaT 3L small punctuation probes** (experimental,
+   `sat_punctuation_probe` / `sat_punctuation_batch_probe`) — accept one
+   exact source-bound XLM-R token window or one bounded arrival batch of up to
+   eight windows and return diagnostic terminal-boundary probabilities. They
+   cannot rewrite transcript words or geometry and are never loaded by normal
+   audio requests.
 
 All models run on the same GPU, sharing the audio file. CLAP runs **concurrently with transcription** (near-zero wall-time overhead; serially it added ~5s per 2-minute chunk); forced alignment adds ~30-50% of the Whisper wall time.
 
@@ -48,7 +49,7 @@ Pre-downloaded into the image (instant cold start — every model a production c
   (`nvidia/parakeet-tdt-0.6b-v3@7c35754d…`) — opt-in multilingual ASR probe
 - **SaT 3L small**
   (`segment-any-text/sat-3l-sm@137da054…`) with pinned XLM-R tokenizer —
-  opt-in source-window punctuation probe
+  opt-in source-window and maximum-eight-window arrival-batch probe
 
 Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace on first request.
 
@@ -60,6 +61,7 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 | `audio_base64` | str | Base64-encoded audio file |
 | `span_stream` | dict | Holy Grale streaming mode. Final mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Draft mode: `{mode:"draft", next_url, poll_ms?, budget_sec?, idle_timeout_sec?}`. Draft warmup mode: `{mode:"draft_warmup", model?}`. Mutually exclusive with `audio`/`audio_base64`; yields results via `/stream`. |
 | `sat_punctuation_probe` | dict | Explicit diagnostic-only SaT window request. Mutually exclusive with audio, `span_stream`, and `clap_queries`; see the exact contract below. |
+| `sat_punctuation_batch_probe` | dict | Explicit diagnostic-only SaT arrival batch with one to eight source windows. Mutually exclusive with the single-window probe, audio, `span_stream`, and `clap_queries`. |
 | `model` | str | Whisper model. Default: `"base"` |
 | `asr_backend` | str | `"whisper"` (default) or the explicit experimental `"parakeet"` path. Parakeet currently supports classic/final jobs only and rejects CLAP, forced alignment, diarization, translation, and VAD instead of silently ignoring them. |
 | `transcription` | str | Output format: `"plain_text"`, `"formatted_text"`, `"srt"`, `"vtt"`. Default: `"plain_text"` |
@@ -144,10 +146,11 @@ per-word probability through this route, so `probability` is `null`; the
 worker never invents confidence. Unsupported declared languages fail with a
 request to route the source to Whisper.
 
-### SaT punctuation window probe (experimental)
+### SaT punctuation window and arrival-batch probes (experimental)
 
-The SaT path is selected only by sending `sat_punctuation_probe`; normal
-Whisper and Parakeet jobs never load it. The request must bind the exact
+The SaT path is selected only by sending `sat_punctuation_probe` or
+`sat_punctuation_batch_probe`; normal Whisper and Parakeet jobs never load it.
+Every request must bind the exact
 model/tokenizer revisions, threshold `0.65`, lowercase source SHA-256, one
 bounded token window, its token SHA-256, and strictly ordered absolute word
 terminal anchors. Complete windows must be exactly 510 tokens on the
@@ -162,6 +165,15 @@ NP-SBV2, cut, or production authority. Invalid identity fails closed.
 The image pins `wtpsplit==2.2.1`, its import-order dependency
 `skops==0.14.0`, and `transformers==5.9.0`; all three versions are checked at
 probe load.
+
+`sat_punctuation_batch_probe` carries the same source, language, candidate,
+token-hash, and absolute-anchor walls for one to eight windows. Complete
+windows must be consecutive on the 64-token source grid. At most one
+provisional terminal tail is allowed and it must be last. Terminal ordinals
+must be unique across the batch. The worker pads to eight rows and performs
+one model forward pass; each returned window retains the exact single-window
+identity, while the response adds a deterministic batch identity. All
+authority flags remain false.
 
 With `force_align: true`, supported-language words are re-timed against the
 audio and each aligned word additionally carries NP-SBV2 silence-run

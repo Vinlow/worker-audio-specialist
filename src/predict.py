@@ -101,6 +101,10 @@ class Predictor:
         """Run the explicit, diagnostic-only SaT source-window probe."""
         return self.sat_punctuator.infer_window(request)
 
+    def predict_punctuation_batch(self, request):
+        """Run one bounded diagnostic SaT arrival batch."""
+        return self.sat_punctuator.infer_batch(request)
+
     def _load_model_locked(self, model_name):
         """
         Load a Whisper model, keeping every previously loaded model RESIDENT
