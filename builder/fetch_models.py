@@ -125,6 +125,49 @@ del _parakeet_processor
 gc.collect()
 print("Finished downloading and validating Parakeet model.")
 
+# ── SaT Experimental Punctuation Window Model ──────────────────────
+# This is a request-explicit diagnostic probe for Starforge. It consumes one
+# already-tokenized, source-bound XLM-R window and returns terminal-boundary
+# probabilities. It never rewrites Whisper words or geometry.
+SAT_MODEL_ID = "segment-any-text/sat-3l-sm"
+SAT_MODEL_REVISION = "137da054051ad9f1eac42025f758db4ac9f22535"
+SAT_TOKENIZER_ID = "FacebookAI/xlm-roberta-base"
+SAT_TOKENIZER_REVISION = "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089"
+print(
+    "Downloading SaT punctuation model: "
+    f"{SAT_MODEL_ID}@{SAT_MODEL_REVISION}..."
+)
+sat_model_snapshot = snapshot_download(
+    repo_id=SAT_MODEL_ID,
+    revision=SAT_MODEL_REVISION,
+    allow_patterns=["config.json", "model.safetensors"],
+    **kwargs_for_hf_callable(snapshot_download),
+)
+sat_tokenizer_snapshot = snapshot_download(
+    repo_id=SAT_TOKENIZER_ID,
+    revision=SAT_TOKENIZER_REVISION,
+    allow_patterns=[
+        "config.json",
+        "sentencepiece.bpe.model",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    ],
+    **kwargs_for_hf_callable(snapshot_download),
+)
+
+# Construction is the compatibility gate: wtpsplit must deserialize the
+# pinned checkpoint under this image's exact Transformers runtime.
+from wtpsplit import SaT
+_sat_punctuator = SaT(
+    sat_model_snapshot,
+    tokenizer_name_or_path=sat_tokenizer_snapshot,
+    from_pretrained_kwargs={"local_files_only": True},
+)
+del _sat_punctuator
+gc.collect()
+print("Finished downloading and validating SaT punctuation model.")
+
 # ── Wav2Vec2 Forced Alignment Model ──────────────────────────────────
 # ~1.2 GB, pre-downloaded for zero cold-start on word-level forced alignment.
 # Used when input has `force_align: true`. Re-times Whisper word_timestamps

@@ -16,12 +16,17 @@ One upload, two signals: transcript + audio understanding. v2.
    `asr_backend: "parakeet"`) — fast punctuation-aware ASR for 25 European
    languages. It is explicit opt-in; the default and every draft path remain
    Whisper.
+6. **SaT 3L small punctuation window probe** (experimental,
+   `sat_punctuation_probe`) — accepts one exact, source-bound XLM-R token
+   window and returns diagnostic terminal-boundary probabilities. It cannot
+   rewrite transcript words or geometry and is never loaded by normal audio
+   requests.
 
 All models run on the same GPU, sharing the audio file. CLAP runs **concurrently with transcription** (near-zero wall-time overhead; serially it added ~5s per 2-minute chunk); forced alignment adds ~30-50% of the Whisper wall time.
 
 Whisper models stay **resident** once loaded (multi-model residency): a request for `small` no longer evicts `large-v3`, so mixed traffic (Studio chunks + tools presets + the `medium` fallback) causes no model-reload churn. The full production set fits in ~9GB alongside CLAP + wav2vec2; on VRAM pressure the least-recently-used model is evicted and the load retried.
 
-Cold construction of CLAP, wav2vec2, pyannote, and Parakeet is serialized
+Cold construction of CLAP, wav2vec2, pyannote, Parakeet, and SaT is serialized
 through one process-wide lock. Current Transformers versions construct models inside a
 temporary meta-device context that patches PyTorch process globals; allowing a
 torchaudio model to start in a parallel thread can otherwise leave that model
@@ -41,6 +46,9 @@ Pre-downloaded into the image (instant cold start — every model a production c
 - **Wav2vec2** (`WAV2VEC2_ASR_LARGE_LV60K_960H`) — CTC forced alignment (English)
 - **Parakeet TDT 0.6B v3**
   (`nvidia/parakeet-tdt-0.6b-v3@7c35754d…`) — opt-in multilingual ASR probe
+- **SaT 3L small**
+  (`segment-any-text/sat-3l-sm@137da054…`) with pinned XLM-R tokenizer —
+  opt-in source-window punctuation probe
 
 Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace on first request.
 
@@ -51,6 +59,7 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 | `audio` | str | URL to audio file |
 | `audio_base64` | str | Base64-encoded audio file |
 | `span_stream` | dict | Holy Grale streaming mode. Final mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Draft mode: `{mode:"draft", next_url, poll_ms?, budget_sec?, idle_timeout_sec?}`. Draft warmup mode: `{mode:"draft_warmup", model?}`. Mutually exclusive with `audio`/`audio_base64`; yields results via `/stream`. |
+| `sat_punctuation_probe` | dict | Explicit diagnostic-only SaT window request. Mutually exclusive with audio, `span_stream`, and `clap_queries`; see the exact contract below. |
 | `model` | str | Whisper model. Default: `"base"` |
 | `asr_backend` | str | `"whisper"` (default) or the explicit experimental `"parakeet"` path. Parakeet currently supports classic/final jobs only and rejects CLAP, forced alignment, diarization, translation, and VAD instead of silently ignoring them. |
 | `transcription` | str | Output format: `"plain_text"`, `"formatted_text"`, `"srt"`, `"vtt"`. Default: `"plain_text"` |
@@ -134,6 +143,22 @@ inference time, and
 per-word probability through this route, so `probability` is `null`; the
 worker never invents confidence. Unsupported declared languages fail with a
 request to route the source to Whisper.
+
+### SaT punctuation window probe (experimental)
+
+The SaT path is selected only by sending `sat_punctuation_probe`; normal
+Whisper and Parakeet jobs never load it. The request must bind the exact
+model/tokenizer revisions, threshold `0.65`, lowercase source SHA-256, one
+bounded token window, its token SHA-256, and strictly ordered absolute word
+terminal anchors. Complete windows must be exactly 510 tokens on the
+64-token source grid. Terminal tails may be shorter.
+
+The response includes exact snapshot manifests, actual device/dtype, runtime,
+input/window identity, and a row per terminal anchor with the raw boundary
+probability and strict-threshold `PERIOD`/`NONE` label. Language is
+caller-asserted and explicitly not model-verified. Every authority flag is
+false: this endpoint is evidence, not transcript, geometry, Natural Landing,
+NP-SBV2, cut, or production authority. Invalid identity fails closed.
 
 With `force_align: true`, supported-language words are re-timed against the
 audio and each aligned word additionally carries NP-SBV2 silence-run

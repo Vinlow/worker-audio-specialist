@@ -27,6 +27,7 @@ from aligner import (
 )
 from hf_auth import normalize_hf_token_env
 from parakeet_transcriber import ParakeetTranscriber
+from sat_punctuator import SaTPunctuator
 
 def parse_suppress_tokens(raw):
     """
@@ -82,10 +83,15 @@ class Predictor:
         self.aligner = Wav2Vec2Aligner()  # lazy-loaded on first force_align call
         self.diarizer = SpeakerDiarizer()  # lazy-loaded on first diarize call
         self.parakeet_transcriber = ParakeetTranscriber()
+        self.sat_punctuator = SaTPunctuator()
 
     def setup(self):
         """No models are pre-loaded. Setup is minimal."""
         pass
+
+    def predict_punctuation_window(self, request):
+        """Run the explicit, diagnostic-only SaT source-window probe."""
+        return self.sat_punctuator.infer_window(request)
 
     def _load_model_locked(self, model_name):
         """

@@ -552,11 +552,21 @@ def run_whisper_job(job):
     # Extract clap_queries before validation — rp_validator chokes on dict types
     raw_clap_queries = job_input.pop('clap_queries', None)
     raw_span_stream = job_input.pop('span_stream', None)
+    raw_sat_punctuation_probe = job_input.pop(
+        'sat_punctuation_probe',
+        None,
+    )
 
     # RunPod serverless streaming jobs can be retried as timed out if a cold
     # worker spends too long loading models before the first stream item.
     # Emit a cheap control item immediately; Studio ignores unknown events.
-    if raw_span_stream is not None:
+    if raw_sat_punctuation_probe is not None:
+        yield {
+            'mode': 'sat_punctuation_probe',
+            'event': 'started',
+            'yield_index': -1,
+        }
+    elif raw_span_stream is not None:
         yield {
             'mode': raw_span_stream.get('mode'),
             'event': 'started',
@@ -588,6 +598,32 @@ def run_whisper_job(job):
                 f"Available backends are: {sorted(predict.AVAILABLE_ASR_BACKENDS)}"
             )
         }
+        return
+
+    if raw_sat_punctuation_probe is not None:
+        if raw_span_stream is not None or raw_clap_queries is not None:
+            yield {
+                'error': (
+                    "sat_punctuation_probe cannot be combined with "
+                    "span_stream or clap_queries"
+                )
+            }
+            return
+        if job_input.get('audio') or job_input.get('audio_base64'):
+            yield {
+                'error': (
+                    "sat_punctuation_probe accepts source tokens, not audio"
+                )
+            }
+            return
+        try:
+            result = MODEL.predict_punctuation_window(
+                raw_sat_punctuation_probe
+            )
+        except Exception as error:
+            yield {'error': str(error)}
+            return
+        yield to_jsonable(result)
         return
 
     if raw_span_stream is not None:

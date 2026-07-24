@@ -10,6 +10,11 @@ faster-whisper==1.2.1
 transformers==5.9.0
 librosa>=0.10.0,<1
 
+# Experimental, request-explicit Starforge sentence-boundary probe. The exact
+# model and tokenizer snapshots are downloaded and constructed during build;
+# ordinary Whisper/Parakeet requests never load it.
+wtpsplit==2.2.1
+
 # Wav2vec2 forced alignment for sub-50ms word-level timestamps.
 # torch + torchaudio are pinned to 2.7.1/cu128 in the Dockerfile (Blackwell
 # sm_120 kernels) — this bare entry only asserts torchaudio's presence and
