@@ -26,6 +26,7 @@ from aligner import (
     Wav2Vec2Aligner,
 )
 from hf_auth import normalize_hf_token_env
+from parakeet_transcriber import ParakeetTranscriber
 
 def parse_suppress_tokens(raw):
     """
@@ -63,6 +64,8 @@ AVAILABLE_MODELS = {
     "turbo",
 }
 
+AVAILABLE_ASR_BACKENDS = {"whisper", "parakeet"}
+
 
 class Predictor:
     """A Predictor class for the Whisper model with lazy loading"""
@@ -78,6 +81,7 @@ class Predictor:
         self.clap_scorer = ClapScorer()
         self.aligner = Wav2Vec2Aligner()  # lazy-loaded on first force_align call
         self.diarizer = SpeakerDiarizer()  # lazy-loaded on first diarize call
+        self.parakeet_transcriber = ParakeetTranscriber()
 
     def setup(self):
         """No models are pre-loaded. Setup is minimal."""
@@ -177,10 +181,43 @@ class Predictor:
         diarize=False,
         diarize_min_speakers=None,
         diarize_max_speakers=None,
+        asr_backend="whisper",
     ):
         """
         Run a single prediction on the model, loading/unloading models as needed.
         """
+        if asr_backend not in AVAILABLE_ASR_BACKENDS:
+            raise ValueError(
+                f"Invalid ASR backend: {asr_backend}. "
+                f"Available backends are: {AVAILABLE_ASR_BACKENDS}"
+            )
+        if asr_backend == "parakeet":
+            incompatible_features = []
+            if translate:
+                incompatible_features.append("translate")
+            if transcription != "plain_text":
+                incompatible_features.append(
+                    f"transcription={transcription}"
+                )
+            if clap_queries:
+                incompatible_features.append("clap_queries")
+            if force_align:
+                incompatible_features.append("force_align")
+            if diarize:
+                incompatible_features.append("diarize")
+            if enable_vad:
+                incompatible_features.append("enable_vad")
+            if incompatible_features:
+                raise ValueError(
+                    "Experimental Parakeet backend does not yet support: "
+                    + ", ".join(incompatible_features)
+                )
+            return self.parakeet_transcriber.transcribe(
+                str(audio),
+                language_hint=language,
+                include_word_timestamps=word_timestamps,
+            )
+
         if model_name not in AVAILABLE_MODELS:
             raise ValueError(
                 f"Invalid model name: {model_name}. Available models are: {AVAILABLE_MODELS}"

@@ -12,13 +12,17 @@ One upload, two signals: transcript + audio understanding. v2.
 4. **pyannote speaker-diarization-3.1** (experimental, `diarize: true`) —
    emits anonymous speaker turns and word-ordinal attribution as a separate
    sidecar. It never rewrites Whisper/NP-SBV2 word geometry.
+5. **NVIDIA Parakeet TDT 0.6B v3** (experimental,
+   `asr_backend: "parakeet"`) — fast punctuation-aware ASR for 25 European
+   languages. It is explicit opt-in; the default and every draft path remain
+   Whisper.
 
 All models run on the same GPU, sharing the audio file. CLAP runs **concurrently with transcription** (near-zero wall-time overhead; serially it added ~5s per 2-minute chunk); forced alignment adds ~30-50% of the Whisper wall time.
 
 Whisper models stay **resident** once loaded (multi-model residency): a request for `small` no longer evicts `large-v3`, so mixed traffic (Studio chunks + tools presets + the `medium` fallback) causes no model-reload churn. The full production set fits in ~9GB alongside CLAP + wav2vec2; on VRAM pressure the least-recently-used model is evicted and the load retried.
 
-Cold construction of CLAP, wav2vec2, and pyannote is serialized through one
-process-wide lock. Current Transformers versions construct models inside a
+Cold construction of CLAP, wav2vec2, pyannote, and Parakeet is serialized
+through one process-wide lock. Current Transformers versions construct models inside a
 temporary meta-device context that patches PyTorch process globals; allowing a
 torchaudio model to start in a parallel thread can otherwise leave that model
 with unmaterialized meta parameters. Only first-load construction and device
@@ -35,6 +39,8 @@ Pre-downloaded into the image (instant cold start — every model a production c
 - **Whisper turbo** — hub CI test
 - **CLAP** (`laion/larger_clap_music_and_speech`) — audio-text similarity
 - **Wav2vec2** (`WAV2VEC2_ASR_LARGE_LV60K_960H`) — CTC forced alignment (English)
+- **Parakeet TDT 0.6B v3**
+  (`nvidia/parakeet-tdt-0.6b-v3@7c35754d…`) — opt-in multilingual ASR probe
 
 Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace on first request.
 
@@ -46,6 +52,7 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 | `audio_base64` | str | Base64-encoded audio file |
 | `span_stream` | dict | Holy Grale streaming mode. Final mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Draft mode: `{mode:"draft", next_url, poll_ms?, budget_sec?, idle_timeout_sec?}`. Draft warmup mode: `{mode:"draft_warmup", model?}`. Mutually exclusive with `audio`/`audio_base64`; yields results via `/stream`. |
 | `model` | str | Whisper model. Default: `"base"` |
+| `asr_backend` | str | `"whisper"` (default) or the explicit experimental `"parakeet"` path. Parakeet currently supports classic/final jobs only and rejects CLAP, forced alignment, diarization, translation, and VAD instead of silently ignoring them. |
 | `transcription` | str | Output format: `"plain_text"`, `"formatted_text"`, `"srt"`, `"vtt"`. Default: `"plain_text"` |
 | `translate` | bool | Translate to English. Default: `false` |
 | `language` | str | Language code, or `null` for auto-detection. Default: `null` |
@@ -97,6 +104,33 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
   ]
 }
 ```
+
+### Parakeet probe (experimental)
+
+Parakeet is selected only by sending `"asr_backend": "parakeet"`. The image
+contains the exact model revision and runtime inference is
+`local_files_only`. Its native token durations are deterministically
+coalesced into word timestamps, but they are **not** NP-SBV2 or Natural
+Landing cut authority:
+
+```json
+{
+  "input": {
+    "audio": "https://example.com/german.wav",
+    "asr_backend": "parakeet",
+    "language": "de",
+    "word_timestamps": true
+  }
+}
+```
+
+The response includes `asr_backend_evidence` with the model revision,
+framework version, supported-language list, language evidence, measured
+inference time, and
+`timestamp_authority: "DIRECTIONAL_NOT_NP_SBV2"`. Parakeet does not expose a
+per-word probability through this route, so `probability` is `null`; the
+worker never invents confidence. Unsupported declared languages fail with a
+request to route the source to Whisper.
 
 With `force_align: true`, supported-language words are re-timed against the
 audio and each aligned word additionally carries NP-SBV2 silence-run
@@ -238,7 +272,9 @@ this fires.
 
 ## Backwards compatibility
 
-Existing callers that don't send `clap_queries` get the same behavior as before — Whisper-only transcription. CLAP is purely additive; `force_align` is opt-in.
+Existing callers that omit `asr_backend` get the same behavior as before:
+Whisper-only transcription. CLAP and `force_align` remain opt-in. Parakeet is
+not eligible for draft jobs and has no automatic production routing.
 
 ### Holy Grale span-stream mode
 

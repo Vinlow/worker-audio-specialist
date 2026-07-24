@@ -14,6 +14,11 @@ INPUT_VALIDATIONS = {
         'required': False,
         'default': 'base'
     },
+    'asr_backend': {
+        'type': str,
+        'required': False,
+        'default': 'whisper'
+    },
     'transcription': {
         'type': str,
         'required': False,

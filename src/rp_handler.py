@@ -310,6 +310,7 @@ def run_final_span_stream_job(job, job_input, span_stream):
                 whisper_results = MODEL.predict(
                     audio=audio_input,
                     model_name=job_input["model"],
+                    asr_backend=job_input["asr_backend"],
                     transcription=job_input["transcription"],
                     translation=job_input["translation"],
                     translate=job_input["translate"],
@@ -580,10 +581,30 @@ def run_whisper_job(job):
     if raw_clap_queries and isinstance(raw_clap_queries, dict):
         job_input['clap_queries'] = raw_clap_queries
 
+    if job_input["asr_backend"] not in predict.AVAILABLE_ASR_BACKENDS:
+        yield {
+            'error': (
+                f"Invalid ASR backend: {job_input['asr_backend']}. "
+                f"Available backends are: {sorted(predict.AVAILABLE_ASR_BACKENDS)}"
+            )
+        }
+        return
+
     if raw_span_stream is not None:
         span_error = validate_span_stream(raw_span_stream)
         if span_error:
             yield {'error': span_error}
+            return
+        if (
+            job_input["asr_backend"] != "whisper"
+            and raw_span_stream.get("mode") != "final"
+        ):
+            yield {
+                'error': (
+                    "Experimental Parakeet backend supports classic and final "
+                    "span jobs only; draft paths remain Whisper"
+                )
+            }
             return
         yield from run_span_stream_job(job, job_input, raw_span_stream)
         return
@@ -620,6 +641,7 @@ def run_whisper_job(job):
             whisper_results = MODEL.predict(
                 audio=audio_input,
                 model_name=job_input["model"],
+                asr_backend=job_input["asr_backend"],
                 transcription=job_input["transcription"],
                 translation=job_input["translation"],
                 translate=job_input["translate"],

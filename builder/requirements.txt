@@ -2,11 +2,12 @@ runpod~=1.8.2
 
 faster-whisper==1.2.1
 
-# CLAP audio-text similarity scoring.
-# transformers is capped below the next major: 5.x reworks/removes model APIs
-# and an unpinned image rebuild must never silently change CLAP scoring
-# behavior (the register baselines + autozoom thresholds depend on it).
-transformers>=4.40.0,<5
+# CLAP audio-text similarity scoring + the opt-in Parakeet TDT probe.
+# 5.9.0 is the first pinned official release used here with
+# AutoModelForTDT. builder/fetch_models.py constructs both CLAP and Parakeet
+# during the image build, so an incompatible rebuild fails before deployment
+# instead of silently changing CLAP scoring or request-time ASR behavior.
+transformers==5.9.0
 librosa>=0.10.0,<1
 
 # Wav2vec2 forced alignment for sub-50ms word-level timestamps.
