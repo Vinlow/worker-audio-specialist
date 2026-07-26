@@ -20,6 +20,7 @@ import time
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from hf_auth import install_legacy_use_auth_token_compat
 from model_load_lock import serialized_model_load
 
 
@@ -232,6 +233,10 @@ class SpeakerDiarizer:
             # checkpoint contains TorchVersion metadata, so allowlist that one
             # inert framework value instead of disabling safe loading for the
             # entire checkpoint.
+            # pyannote.audio 3.3.2 still imports hf_hub_download with the
+            # removed use_auth_token keyword. Install the process-local
+            # token->token adapter before pyannote copies that callable.
+            install_legacy_use_auth_token_compat()
             from pyannote.audio import Pipeline
             from pyannote.audio.core.task import (
                 Problem,
