@@ -1,4 +1,6 @@
+import hashlib
 import unittest
+from pathlib import Path
 
 from sat_punctuator import (
     SAT_BATCH_REQUEST_SCHEMA_VERSION,
@@ -6,9 +8,16 @@ from sat_punctuator import (
     SAT_MODEL_ID,
     SAT_MODEL_REVISION,
     SAT_REQUEST_SCHEMA_VERSION,
+    SAT_SOURCE_CONTRACT_FILES,
+    SAT_SOURCE_CONTRACT_KIND,
+    SAT_SOURCE_CONTRACT_ROUTE,
     SAT_TOKENIZER_ID,
     SAT_TOKENIZER_REVISION,
+    SaTPunctuator,
+    canonical_json,
     normalize_language,
+    sha256_file,
+    source_contract_id,
     token_sha256,
     validate_batch_request,
     validate_probe_request,
@@ -92,6 +101,34 @@ def batch_request_for():
 
 
 class SaTPunctuatorContractTest(unittest.TestCase):
+    def test_implementation_binds_exact_nonrecursive_source_contract(self):
+        source_root = Path(__file__).resolve().parent
+        body = {
+            "kind": SAT_SOURCE_CONTRACT_KIND,
+            "route": SAT_SOURCE_CONTRACT_ROUTE,
+            "requestSchema": SAT_BATCH_REQUEST_SCHEMA_VERSION,
+            "batchResponseSchema": (
+                "w2l-sat-punctuation-batch-probe-v1"
+            ),
+            "windowResponseSchema": (
+                "w2l-sat-punctuation-window-probe-v1"
+            ),
+            "sourceBlobs": {
+                logical_path: sha256_file(source_root / runtime_path)
+                for logical_path, runtime_path in sorted(
+                    SAT_SOURCE_CONTRACT_FILES.items()
+                )
+            },
+        }
+        expected = "sha256:" + hashlib.sha256(
+            canonical_json(body).encode("utf-8")
+        ).hexdigest()
+
+        self.assertEqual(expected, source_contract_id(source_root))
+        implementation = SaTPunctuator()._implementation()
+        self.assertEqual(expected, implementation["sourceContractId"])
+        self.assertNotIn("workerGitSha", implementation)
+
     def test_language_is_primary_subtag_and_launch_gated(self):
         self.assertEqual("es", normalize_language("es-ES"))
         with self.assertRaisesRegex(ValueError, "does not support"):
