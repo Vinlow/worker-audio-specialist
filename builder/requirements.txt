@@ -1,4 +1,12 @@
-runpod~=1.8.2
+runpod==1.8.2
+
+# Do not let product dependencies be satisfied by Ubuntu's moving Python
+# packages. RunPod/Paramiko need cryptography, CTranslate2 declares
+# setuptools, and python-dateutil uses six. These exact pip wheels are part of
+# the reviewed runtime graph just like every other dependency below.
+cryptography==45.0.7
+setuptools==80.9.0
+six==1.17.0
 
 faster-whisper==1.2.1
 
@@ -8,7 +16,9 @@ faster-whisper==1.2.1
 # during the image build, so an incompatible rebuild fails before deployment
 # instead of silently changing CLAP scoring or request-time ASR behavior.
 transformers==5.9.0
-librosa>=0.10.0,<1
+librosa==0.11.0
+huggingface_hub[hf_xet]==1.27.0
+hf-xet==1.6.0
 
 # Experimental, request-explicit Starforge sentence-boundary probe. The exact
 # model and tokenizer snapshots are downloaded and constructed during build;
@@ -28,8 +38,19 @@ torchaudio
 # Opt-in speaker diarization. Version 3.3.2 + speaker-diarization-3.1 supports
 # the worker's protected torch/torchaudio 2.7.1 cu128 pair. Community-1 needs
 # torch >=2.8 and stays a separate future quality challenger.
+#
+# pyannote.audio 3.3.2 declares only lower bounds for its companion packages.
+# Their later 4.x/6.x majors are a different API generation and must not be
+# selected merely because the image was rebuilt on a newer day.  The 3.x
+# inference line also contains NumPy aliases removed in NumPy 2.x, so keep the
+# reviewed 1.26 ABI until the entire diarization stack is upgraded together.
+numpy==1.26.4
 pyannote.audio==3.3.2
+pyannote.core==5.0.0
+pyannote.database==5.1.3
+pyannote.metrics==3.2.1
+pyannote.pipeline==3.0.1
 # speaker-diarization-3.1 imports pyannote's visualization module while
 # restoring the pipeline. pyannote.audio 3.3.2 does not declare matplotlib as
 # a hard dependency, so a clean worker image otherwise fails at model load.
-matplotlib>=3.8,<4
+matplotlib==3.10.9

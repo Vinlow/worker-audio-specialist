@@ -8,7 +8,7 @@ One upload, two signals: transcript + audio understanding. v2.
 
 1. **Faster-Whisper** — Speech-to-text with word-level timing and per-word confidence (probability)
 2. **Wav2vec2 forced alignment** (optional, `force_align: true`) — re-times each word against the actual audio waveform (~30-50ms accuracy vs Whisper's ~100-300ms) and adds NP-SBV2 silence-run boundaries (`onset_start` / `offset_end`) for cut-friendly timing
-3. **CLAP** (optional) — Scores audio against natural language queries ("loud explosions", "excited reactions", "dramatic music") and returns per-second relevance scores
+3. **CLAP** (optional) — Scores audio against natural language queries ("loud explosions", "excited reactions", "dramatic music") and returns per-second affine cosine similarities. They are bounded signals, not calibrated event probabilities.
 4. **pyannote speaker-diarization-3.1** (experimental, `diarize: true`) —
    emits anonymous speaker turns and word-ordinal attribution as a separate
    sidecar. It never rewrites Whisper/NP-SBV2 word geometry.
@@ -23,9 +23,9 @@ One upload, two signals: transcript + audio understanding. v2.
    cannot rewrite transcript words or geometry and are never loaded by normal
    audio requests.
 
-All models run on the same GPU, sharing the audio file. CLAP runs **concurrently with transcription** (near-zero wall-time overhead; serially it added ~5s per 2-minute chunk); forced alignment adds ~30-50% of the Whisper wall time.
+All models run on the same GPU, sharing the audio file. CLAP overlaps the CTranslate2 Whisper phase, then joins before wav2vec2 alignment or pyannote inference so the heavy PyTorch activation peaks do not stack. Forced alignment adds ~30-50% of the Whisper wall time.
 
-Whisper models stay **resident** once loaded (multi-model residency): a request for `small` no longer evicts `large-v3`, so mixed traffic (Studio chunks + tools presets + the `medium` fallback) causes no model-reload churn. The full production set fits in ~9GB alongside CLAP + wav2vec2; on VRAM pressure the least-recently-used model is evicted and the load retried.
+Whisper models stay **resident** once loaded (multi-model residency): a request for `small` no longer evicts `large-v3`, so mixed traffic (Studio chunks + tools presets + the `medium` fallback) avoids model-reload churn. A resident Whisper model is evicted only when a load fails with classified resource exhaustion; authentication, artifact, and network failures leave healthy models intact.
 
 Cold construction of CLAP, wav2vec2, pyannote, Parakeet, and SaT is serialized
 through one process-wide lock. Current Transformers versions construct models inside a
@@ -36,9 +36,18 @@ transfer are serialized—resident-model inference remains concurrent. Wav2vec2
 retries one clean serialized construction if a bundle still returns meta
 tensors, then fails closed rather than publishing or inventing weights.
 
+The image starts an asynchronous CLAP model and audio-decoder warmup by default
+(`AUDIO_WORKER_PRELOAD=clap`) so RunPod registration is not blocked by model
+transfer. The variable accepts a comma-separated opt-in list (`clap`,
+`alignment`, `diarization`, `parakeet`, `sat`, or `whisper:<model>`). CLAP uses
+64-window microbatches by default; `CLAP_MICROBATCH_SIZE` may lower that initial
+ceiling for a smaller GPU, and runtime OOM recovery still halves it
+automatically.
+
 ## Models
 
-Pre-downloaded into the image (instant cold start — every model a production code path requests):
+Pre-downloaded at exact reviewed revisions into the image (every accepted Whisper model is runtime-offline):
+- **Whisper base** — public API default
 - **Whisper large-v3** — web2labs primary transcription model
 - **Whisper medium** — web2labs fallback + tools quality preset
 - **Whisper small** — tools fast preset
@@ -50,16 +59,22 @@ Pre-downloaded into the image (instant cold start — every model a production c
 - **SaT 3L small**
   (`segment-any-text/sat-3l-sm@137da054…`) with pinned XLM-R tokenizer —
   opt-in source-window and maximum-eight-window arrival-batch probe
+- **pyannote speaker diarization 3.1** — the pipeline, segmentation model, and
+  WeSpeaker PyTorch checkpoint are pinned independently. Because the
+  repositories are gated, a deployable image is built with the `hf_token`
+  BuildKit secret. Runtime loading is cache-only and never reaches the Hub.
 
-Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace on first request.
+Only `base`, `small`, `medium`, `large-v3`, and `turbo` are accepted. Adding a
+Whisper model requires adding and baking its immutable revision first; requests
+never trigger a mutable Hugging Face download.
 
 ## Input
 
 | Input | Type | Description |
 |---|---|---|
-| `audio` | str | URL to audio file |
-| `audio_base64` | str | Base64-encoded audio file |
-| `span_stream` | dict | Holy Grale streaming mode. Final mode: `{mode:"final", spans:[{index,audio,start_sec}]}`. Draft mode: `{mode:"draft", next_url, poll_ms?, budget_sec?, idle_timeout_sec?}`. Draft warmup mode: `{mode:"draft_warmup", model?}`. Mutually exclusive with `audio`/`audio_base64`; yields results via `/stream`. |
+| `audio` | str | HTTP(S) URL to an audio file, streamed with retries and a 64 MiB ceiling. Signed credentials/path/query/fragment data is redacted from failures and logs. |
+| `audio_base64` | str | Strict Base64-encoded audio file, at most 64 MiB decoded. |
+| `span_stream` | dict | Holy Grale streaming mode. Final mode: `{mode:"final", spans:[{index,audio,start_sec}]}` with 1–64 unique spans. Draft mode: `{mode:"draft", next_url, poll_ms?, budget_sec?, idle_timeout_sec?}`. Draft warmup mode: `{mode:"draft_warmup", model?}` (defaults to `turbo`). Mutually exclusive with `audio`/`audio_base64`; yields results via `/stream`. |
 | `sat_punctuation_probe` | dict | Explicit diagnostic-only SaT window request. Mutually exclusive with audio, `span_stream`, and `clap_queries`; see the exact contract below. |
 | `sat_punctuation_batch_probe` | dict | Explicit diagnostic-only SaT arrival batch with one to eight source windows. Mutually exclusive with the single-window probe, audio, `span_stream`, and `clap_queries`. |
 | `model` | str | Whisper model. Default: `"base"` |
@@ -70,10 +85,10 @@ Other Whisper sizes in `AVAILABLE_MODELS` work too but download from HuggingFace
 | `word_timestamps` | bool | Include per-word timestamps and probability. Default: `false` |
 | `force_align` | bool | Re-time supported-language `word_timestamps` via wav2vec2 CTC alignment and add per-word `onset_start`/`offset_end` evidence. Requires `word_timestamps: true`. The current model supports English only; unsupported languages fail soft with an explicit status. Default: `false` |
 | `diarize` | bool | Experimental speaker diarization sidecar. Requires `word_timestamps: true` for word attribution. Default: `false` |
-| `diarize_min_speakers` | int | Optional minimum speaker hint. `0` means automatic. |
-| `diarize_max_speakers` | int | Optional maximum speaker hint. `0` means automatic. |
+| `diarize_min_speakers` | int | Optional minimum speaker hint from 0–64. `0` means automatic. |
+| `diarize_max_speakers` | int | Optional maximum speaker hint from 0–64. `0` means automatic. |
 | `enable_vad` | bool | Enable Silero VAD to filter non-speech. Default: `false` |
-| `clap_queries` | dict | CLAP query dict `{name: "description"}`. If omitted, CLAP scoring is skipped. |
+| `clap_queries` | dict | CLAP query dict `{name: "description"}` with 1–256 entries and bounded names/descriptions. If omitted, CLAP scoring is skipped. |
 | `temperature` | float | Sampling temperature. Default: `0` |
 | `best_of` | int | Candidates when sampling with non-zero temperature. Default: `5` |
 | `beam_size` | int | Beam search width. Default: `5` |
@@ -234,10 +249,16 @@ words by their unchanged ordinal in `word_timestamps`:
   "speaker_diarization": {
     "schema_version": "w2l-speaker-diarization-v1",
     "status": "COMPLETED",
+    "quality_status": "PARTIAL",
+    "model_load_policy": "BAKED_CACHE_ONLY",
     "identity_scope": "CHUNK_LOCAL_UNSTABLE",
     "boundary_authority": false,
     "transcript_geometry_mutated": false,
     "speaker_count": 2,
+    "word_count": 12,
+    "attribution_count": 11,
+    "attribution_fraction": 0.9167,
+    "coverage_fraction": 0.9167,
     "turns": [
       { "start_sec": 0.1, "end_sec": 2.3, "speaker_id": "SPEAKER_00" }
     ],
@@ -246,40 +267,82 @@ words by their unchanged ordinal in `word_timestamps`:
         "word_index": 0,
         "status": "ATTRIBUTED",
         "speaker_id": "SPEAKER_00",
+        "coverage_fraction": 0.98,
         "confidence": 0.98,
-        "overlap": false
+        "overlap": false,
+        "sequential_handoff": false,
+        "candidate_speaker_ids": ["SPEAKER_00"]
       }
     ]
   }
 }
 ```
 
-`HUGGINGFACE_TOKEN` (or `HF_TOKEN`) must be available to the runtime and the
-speaker-diarization-3.1 plus segmentation-3.0 model conditions must have been
-accepted. A missing model/token returns a `FAILED` sidecar while preserving
-the successful transcript.
+`confidence` is retained as a compatibility alias for temporal
+`coverage_fraction`; it is not a calibrated speaker probability. True
+simultaneous speech returns v1-compatible word `status: "UNKNOWN"`, additive
+`attribution_reason: "AMBIGUOUS_OVERLAP"`, no forced `speaker_id`, and
+per-candidate coverage evidence. A sequential A→B handoff in one word is
+reported separately and is not mislabeled as overlap. Top-level v1 `status`
+remains `COMPLETED` or `FAILED`; additive `quality_status` is `COMPLETED`,
+`PARTIAL`, or `EMPTY_OUTPUT`. Zero turns when words need attribution are
+`FAILED` with `DIARIZATION_EMPTY_OUTPUT`. Final span-stream sidecars also carry
+`timebase: "SPAN_RELATIVE_SECONDS"`, `span_index`, and `span_start_sec`.
+
+The speaker-diarization-3.1 and segmentation-3.0 model conditions must be
+accepted by the token used during image build. The token is not persisted and
+is not required at runtime. A missing/incompatible baked artifact returns a
+`FAILED` sidecar while preserving the successful transcript.
 
 ### CLAP scores (when `clap_queries` provided)
 
 ```json
 {
   "clap_scores": {
+    "schema_version": "w2l-clap-scores-v2",
+    "status": "COMPLETED",
+    "error_code": null,
+    "retryable": false,
     "scores": {
       "action": [0.52, 0.48, 0.91, 0.87, ...],
       "reaction": [0.31, 0.29, 0.72, 0.68, ...]
     },
     "duration": 120.5,
+    "window_count": 121,
+    "final_window_valid_seconds": 0.5,
     "model": "laion/larger_clap_music_and_speech",
+    "model_revision": "195c3a3e68faebb3e2088b9a79e79b43ddbda76b",
     "device": "cuda",
-    "windowSize": 1.0
+    "windowSize": 1.0,
+    "score_semantics": {
+      "source": "cosine_similarity",
+      "calibration": "affine_cosine_not_probability"
+    },
+    "batching": {
+      "configured_microbatch_size": 64,
+      "effective_microbatch_size": 64,
+      "oom_retries": 0
+    }
   }
 }
 ```
 
-Each query gets a per-second array of relevance scores (0-1). Use these for:
+Each query gets a per-second array of bounded affine cosine similarities. The
+scores are useful for relative ranking and class-specific calibration, but are
+not event probabilities and should not share one absolute threshold across all
+prompts. The pinned Transformers 5.9 preprocessing explicitly uses CLAP's
+`repeatpad` audio strategy; text embeddings are cached by bounded query-set
+identity, text prompts use longest-in-microbatch padding under a fixed token
+cap, and CUDA/cuBLAS/cuDNN allocation failures halve audio or text microbatches
+down to one item. Use the signal for:
 - Content-type-specific highlight detection (gunfire for gaming, applause for talks)
-- Audio energy profiling without manual threshold tuning
+- Audio energy profiling with prompt-specific calibration
 - Open-vocabulary audio event detection
+
+CLAP is fail-soft with respect to a valid Whisper transcript. If scoring fails,
+`clap_scores` remains `null` for backward compatibility and `clap_diagnostics`
+contains the same v2 status/error/retryability/timing metadata without a score
+matrix.
 
 ## Example
 
@@ -304,14 +367,20 @@ Each query gets a per-second array of relevance scores (0-1). Use these for:
 A failed audio download fails the job with a classifiable signature instead of
 an opaque `FileNotFoundError` from inside faster-whisper:
 
-```
-MEDIA_FETCH_FAILED: could not download audio from <url>
+```json
+{
+  "error": "MEDIA_FETCH_FAILED: could not fetch audio from https://example.com",
+  "code": "MEDIA_FETCH_FAILED",
+  "stage": "classic_download",
+  "retryable": true
+}
 ```
 
 The web2labs server recognizes `MEDIA_FETCH_FAILED` and skips its
 model-fallback retry (re-running a doomed download with a smaller model
 wouldn't help). The SDK already retries the download 3× with backoff before
-this fires.
+this fires. The response exposes only the URL origin; credentials, path, query,
+and fragment are never echoed.
 
 ## Backwards compatibility
 
@@ -347,7 +416,12 @@ classic Studio path:
 The handler yields one normal transcription result per span, with `span_index`
 and `start_sec` added. `return_aggregate_stream` is enabled, so clients can use
 `/stream` for incremental span results while `/run` and `/runsync` can still
-receive the aggregate list.
+receive the aggregate list. One span download or inference failure yields a
+typed `event: "span_error"` with `failed_span_index` and does not discard later
+ready spans. Recoverable events intentionally use `message` rather than a
+top-level `error`, because RunPod 1.8.2 treats `error` as terminal. Each
+downloaded span is deleted before its result is yielded; the job no longer
+retains every span until terminal cleanup.
 
 Draft-tier mode is the Holy Grale ticker probe path. It polls a growing
 `next_url` endpoint for small audio segments, transcribes each available segment
@@ -429,6 +503,56 @@ It yields a single control event:
   }
 }
 ```
+
+## Build and verification
+
+The Dockerfile pins its CUDA base digest, the full reviewed Python dependency
+resolution in `builder/constraints.txt`, and reviewed Hub revisions. To include
+the gated diarization artifacts without persisting a
+token in image metadata, expose the token only as a BuildKit secret:
+
+```bash
+docker build --build-arg GATED_MODELS_AVAILABLE=true \
+  --build-arg AUDIO_WORKER_BUILD_SHA="$(git rev-parse HEAD)" \
+  --secret id=hf_token,env=HF_TOKEN -t audio-worker:holy-grale .
+docker run --rm --entrypoint python audio-worker:holy-grale \
+  -m unittest discover -v -s / -p 'test_*.py'
+docker run --rm --network none -e AUDIO_WORKER_REAL_MODEL_SMOKE=1 \
+  --entrypoint python audio-worker:holy-grale \
+  -m unittest -v test_diarizer_real_model
+docker run --rm --network none -e AUDIO_WORKER_REAL_MODEL_SMOKE=1 \
+  --entrypoint python audio-worker:holy-grale \
+  -m unittest -v test_clap_real_model
+```
+
+The `CI | Holy Grale worker gate` workflow gives every pull request a hosted
+compile gate without exposing the gated-model secret or persistent runner.
+Trusted `holy-grale` pushes and manual runs additionally use the large
+self-hosted `DO` runner for the exact image build, dependency check, in-image
+unit/contract suite, and token-free/network-disabled CLAP and pyannote smokes.
+That image gate runs only while the `DO` runner is online; local execution of
+the commands above is the release gate when it is unavailable.
+
+Runtime sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` globally after
+the model-baking layer, preventing background Hub conversion checks as well as
+ordinary loader downloads. The image label and startup log carry the exact
+`AUDIO_WORKER_BUILD_SHA`. Secret-bearing BuildKit layers are never exported to
+the GitHub Actions cache; the persistent runner's private local cache is the
+only build cache used by that job.
+
+Test-endpoint rollout is also fail-closed and dry-run by default. It accepts
+only an immutable digest in the locked GHCR repository and verifies the exact
+holy-grale endpoint, template, exclusive binding, and registry credential
+before it can patch anything:
+
+```bash
+python scripts/deploy_holy_grale_test.py \
+  --image ghcr.io/vinlow/worker-audio-specialist@sha256:<digest>
+# Repeat with --apply only after reviewing the dry-run summary.
+```
+
+The script never targets a production endpoint and never prints template
+environment values or API error bodies.
 
 ## Based on
 

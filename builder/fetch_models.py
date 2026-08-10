@@ -1,6 +1,8 @@
 import gc
+import hashlib
 import inspect
 import os
+from pathlib import Path
 
 # wtpsplit 2.2.1 deliberately initializes skops before Transformers. Skops
 # enumerates trusted types at import time; reversing the order can force
@@ -10,20 +12,38 @@ import skops.io as _skops_io  # noqa: F401
 
 from faster_whisper.utils import download_model
 from huggingface_hub import snapshot_download
+from model_manifest import (
+    CLAP_MODEL_ID,
+    CLAP_MODEL_REVISION,
+    PYANNOTE_SNAPSHOTS,
+    WAV2VEC2_CHECKPOINT_FILENAME,
+    WAV2VEC2_CHECKPOINT_SHA256,
+    WHISPER_MODEL_REVISIONS,
+)
 
 
 def get_hf_token():
     return (
         os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGINGFACE_TOKEN")
         or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         or os.environ.get("HUGGINGFACE_HUB_TOKEN")
         or ""
     ).strip()
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as checkpoint_file:
+        for chunk in iter(lambda: checkpoint_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 HF_TOKEN = get_hf_token()
 if HF_TOKEN:
     os.environ.setdefault("HF_TOKEN", HF_TOKEN)
+    os.environ.setdefault("HUGGINGFACE_TOKEN", HF_TOKEN)
     os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", HF_TOKEN)
     print("Hugging Face token detected; authenticated model downloads enabled.")
 else:
@@ -44,45 +64,81 @@ def kwargs_for_hf_callable(callable_obj):
     return {}
 
 
-def download_whisper_model(model_name):
-    kwargs = {"cache_dir": None, **kwargs_for_hf_callable(download_model)}
+def download_whisper_model(model_name, revision):
+    kwargs = {
+        "cache_dir": None,
+        "revision": revision,
+        **kwargs_for_hf_callable(download_model),
+    }
     try:
         return download_model(model_name, **kwargs)
     except TypeError as exc:
         if "token" not in str(exc) and "use_auth_token" not in str(exc):
             raise
-        return download_model(model_name, cache_dir=None)
+        return download_model(model_name, cache_dir=None, revision=revision)
 
 # ── Whisper Models ──────────────────────────────────────────────────
-# Pre-download every model production actually requests.
-# Other models in AVAILABLE_MODELS (predict.py) download on first request —
-# do NOT let a model land in a production code path without adding it here:
-# a request-time download makes that path depend on HuggingFace availability
-# and adds 30-60s cold latency. `medium` is the web2labs fallback model,
-# which fires exactly when a job already failed once — the worst possible
-# moment to be downloading from the network.
-whisper_models = [
-    "large-v3",  # web2labs primary transcription model (transcribeStream)
-    "medium",    # web2labs fallback + tools QUALITY_PRESET + static transcribe()
-    "small",     # tools FAST_PRESET (tools.whisper.service.ts)
-    "turbo",     # RunPod hub CI test (.runpod/tests.json)
-]
-
-for model_name in whisper_models:
-    print(f"Downloading Whisper model: {model_name}...")
-    download_whisper_model(model_name)
-    print(f"Finished downloading {model_name}.")
+# Pre-download every accepted model. ``predict.py`` derives its allowlist from
+# this same manifest and reopens only the exact baked revision offline. Do not
+# add an API-visible model anywhere else: request-time Hub access makes that
+# path mutable and adds 30-60s cold latency. ``medium`` is the Web2Labs
+# fallback, which fires exactly when a job already failed once — the worst
+# possible moment to discover a missing artifact.
+for model_name, revision in WHISPER_MODEL_REVISIONS.items():
+    print(f"Downloading Whisper model: {model_name}@{revision}...")
+    download_whisper_model(model_name, revision)
+    print(f"Finished downloading {model_name}@{revision}.")
 
 # ── CLAP Model ──────────────────────────────────────────────────────
 # ~1.5 GB, pre-downloaded for zero cold-start on CLAP scoring requests.
-CLAP_MODEL_ID = "laion/larger_clap_music_and_speech"
-print(f"Downloading CLAP model: {CLAP_MODEL_ID}...")
+print(f"Downloading CLAP model: {CLAP_MODEL_ID}@{CLAP_MODEL_REVISION}...")
 
 from transformers import ClapModel, ClapProcessor
-CLAP_KWARGS = kwargs_for_hf_callable(ClapModel.from_pretrained)
+snapshot_download(
+    repo_id=CLAP_MODEL_ID,
+    revision=CLAP_MODEL_REVISION,
+    **kwargs_for_hf_callable(snapshot_download),
+)
+CLAP_KWARGS = {
+    "revision": CLAP_MODEL_REVISION,
+    "local_files_only": True,
+    **kwargs_for_hf_callable(ClapModel.from_pretrained),
+}
 ClapProcessor.from_pretrained(CLAP_MODEL_ID, **CLAP_KWARGS)
 ClapModel.from_pretrained(CLAP_MODEL_ID, **CLAP_KWARGS)
 print(f"Finished downloading CLAP model.")
+
+
+# ── pyannote diarization artifacts (when a build secret is available) ───
+# The token is mounted as a BuildKit secret and is never baked into the image.
+# Runtime is deliberately cache-only, so a deployable diarization image must
+# include all exact files here.
+
+if HF_TOKEN:
+    for repo_id, snapshot in PYANNOTE_SNAPSHOTS.items():
+        expected_revision = snapshot["revision"]
+        allow_patterns = list(snapshot["allow_patterns"])
+        print(f"Downloading diarization artifact: {repo_id}@{expected_revision}...")
+        snapshot_path = snapshot_download(
+            repo_id=repo_id,
+            # Runtime rewrites every legacy pyannote 3.1 dependency to this
+            # immutable revision, so the image cache must use the same identity.
+            revision=expected_revision,
+            allow_patterns=allow_patterns,
+            **kwargs_for_hf_callable(snapshot_download),
+        )
+        resolved_revision = Path(snapshot_path).name
+        if resolved_revision != expected_revision:
+            raise RuntimeError(
+                f"{repo_id} snapshot mismatch: expected {expected_revision}, "
+                f"resolved {resolved_revision}"
+            )
+        print(f"Finished downloading {repo_id}@{resolved_revision}.")
+else:
+    print(
+        "No Hugging Face token at build time; skipping gated pyannote cache. "
+        "The optional diarization path will fail closed in offline mode."
+    )
 
 # ── Parakeet TDT Experimental ASR Model ─────────────────────────────
 # The model is optional at request time but immutable and image-resident when
@@ -182,6 +238,18 @@ print("Finished downloading and validating SaT punctuation model.")
 print("Downloading wav2vec2 alignment model: WAV2VEC2_ASR_LARGE_LV60K_960H...")
 from torchaudio.pipelines import WAV2VEC2_ASR_LARGE_LV60K_960H as W2V_BUNDLE
 _ = W2V_BUNDLE.get_model()  # downloads + caches the .pth into ~/.cache/torch/hub/checkpoints
+wav2vec_checkpoint = (
+    Path(torch.hub.get_dir())
+    / "checkpoints"
+    / WAV2VEC2_CHECKPOINT_FILENAME
+)
+wav2vec_digest = sha256_file(wav2vec_checkpoint)
+if wav2vec_digest != WAV2VEC2_CHECKPOINT_SHA256:
+    raise RuntimeError(
+        "wav2vec2 checkpoint digest mismatch: "
+        f"expected {WAV2VEC2_CHECKPOINT_SHA256}, resolved {wav2vec_digest}"
+    )
+print(f"Verified wav2vec2 checkpoint sha256: {wav2vec_digest}")
 print("Finished downloading wav2vec2 alignment model.")
 
 print("All models downloaded.")
