@@ -14,6 +14,7 @@ def get_hf_token():
     """Return the configured Hugging Face token without logging it."""
     return (
         os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGINGFACE_TOKEN")
         or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         or os.environ.get("HUGGINGFACE_HUB_TOKEN")
         or ""
@@ -26,6 +27,7 @@ def normalize_hf_token_env():
     if not token:
         return ""
     os.environ.setdefault("HF_TOKEN", token)
+    os.environ.setdefault("HUGGINGFACE_TOKEN", token)
     os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)
     return token
 

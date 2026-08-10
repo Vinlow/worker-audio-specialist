@@ -1,31 +1,25 @@
 import io
+import os
+import wave
 
 import numpy as np
 from locust import HttpUser, task
 import base64
-from pydub import AudioSegment
 
 
-def generate_random_audio(duration_ms):
-    # Generate random data
-    samples = np.random.normal(0, 1, int(44100 * duration_ms / 1000.0))
-
-    # Convert to int16 array so we can make use of the pydub package
-    samples = (samples * np.iinfo(np.int16).max).astype(np.int16)
-
-    # Create an audio segment
-    audio_segment = AudioSegment(
-        samples.tobytes(),
-        frame_rate=44100,
-        sample_width=samples.dtype.itemsize,
-        channels=1
-    )
-
-    # Convert the audio segment to a base64 string
+def generate_test_audio(duration_ms):
+    """Create deterministic PCM WAV without the undeclared pydub dependency."""
+    sample_rate = 16_000
+    sample_count = int(sample_rate * duration_ms / 1000.0)
+    time_axis = np.arange(sample_count, dtype=np.float32) / sample_rate
+    samples = (0.15 * np.sin(2 * np.pi * 440 * time_axis) * 32767).astype(np.int16)
     buffer = io.BytesIO()
-    audio_segment.export(buffer, format="wav")
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(samples.tobytes())
     base64_audio = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
     return base64_audio
 
 class ApiUser(HttpUser):
@@ -34,16 +28,21 @@ class ApiUser(HttpUser):
         headers = {
             'Content-Type': 'application/json',
         }
-        audio_data = generate_random_audio(1000)    # 1 second audio
+        api_key = os.environ.get("RUNPOD_API_KEY")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        audio_data = generate_test_audio(5000)
         
         data = {
             "input": {
-                "audio": audio_data
+                "audio_base64": audio_data,
+                "model": "turbo",
+                "word_timestamps": True,
+                "clap_queries": {
+                    "tone": "a steady electronic tone",
+                    "speech": "a person speaking",
+                },
             }
         }
-        
-        self.client.post("/v2/xxxxx/runsync", json=data, headers=headers)  # Replace with your endpoint ID
-
-if __name__ == "__main__":
-    import os
-    os.system("locust -f locustfile.py")
+        endpoint_id = os.environ.get("RUNPOD_ENDPOINT_ID", "dx99xymo20v3o9")
+        self.client.post(f"/v2/{endpoint_id}/runsync", json=data, headers=headers)

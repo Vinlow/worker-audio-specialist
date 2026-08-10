@@ -10,14 +10,24 @@ extended with CLAP scoring for Web2Labs Studio.
 """
 
 import gc
+import os
+import re
 import threading
+import time
+import warnings
 import numpy as np
 
 # wtpsplit requires skops to initialize before any Transformers-backed module.
 # The dependency is guaranteed in the worker image; the narrow fallback keeps
 # lightweight AST/unit environments able to import ordinary Whisper code.
 try:
-    import skops.io as _skops_io  # noqa: F401
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Torchaudio's I/O functions now support.*",
+            category=UserWarning,
+        )
+        import skops.io as _skops_io  # noqa: F401
 except ModuleNotFoundError:
     _skops_io = None
 
@@ -34,6 +44,8 @@ from aligner import (
     Wav2Vec2Aligner,
 )
 from hf_auth import normalize_hf_token_env
+from model_manifest import WHISPER_MODEL_REVISIONS
+from model_load_lock import serialized_model_load
 from parakeet_transcriber import ParakeetTranscriber
 from sat_punctuator import SaTPunctuator
 
@@ -59,21 +71,15 @@ def parse_suppress_tokens(raw):
 
 
 # Define available models (for validation)
-AVAILABLE_MODELS = {
-    "tiny",
-    "base",
-    "small",
-    "medium",
-    "large-v1",
-    "large-v2",
-    "large-v3",
-    "distil-large-v2",
-    "distil-large-v3",
-    "distil-large-v3.5",
-    "turbo",
-}
+AVAILABLE_MODELS = set(WHISPER_MODEL_REVISIONS)
 
 AVAILABLE_ASR_BACKENDS = {"whisper", "parakeet"}
+
+RESOURCE_EXHAUSTION_PATTERN = re.compile(
+    r"out of memory|failed to allocate|not enough memory|"
+    r"cublas_status_alloc_failed|cuda_error_out_of_memory",
+    re.IGNORECASE,
+)
 
 
 class Predictor:
@@ -92,10 +98,72 @@ class Predictor:
         self.diarizer = SpeakerDiarizer()  # lazy-loaded on first diarize call
         self.parakeet_transcriber = ParakeetTranscriber()
         self.sat_punctuator = SaTPunctuator()
+        self._warmup_thread = None
 
     def setup(self):
-        """No models are pre-loaded. Setup is minimal."""
-        pass
+        """Optionally warm image-resident models without delaying registration.
+
+        RunPod imports this module before registering the handler.  A synchronous
+        warmup therefore makes the worker look dead during model transfer.  The
+        background thread starts cache deserialization immediately while the SDK
+        is still connecting; every component's own setup lock makes a first job
+        safely join the same single-flight load.
+        """
+        requested = [
+            item.strip().lower()
+            for item in os.environ.get("AUDIO_WORKER_PRELOAD", "").split(",")
+            if item.strip()
+        ]
+        if not requested:
+            return
+
+        def warm_components():
+            for component in requested:
+                started = time.perf_counter()
+                try:
+                    if component == "clap":
+                        self.clap_scorer.warmup()
+                    elif component == "alignment":
+                        device = "cuda" if rp_cuda.is_available() else "cpu"
+                        self.aligner.setup(device=device)
+                    elif component == "diarization":
+                        device = "cuda" if rp_cuda.is_available() else "cpu"
+                        self.diarizer.setup(device)
+                    elif component == "parakeet":
+                        self.parakeet_transcriber.setup()
+                    elif component == "sat":
+                        self.sat_punctuator.setup()
+                    elif component.startswith("whisper:"):
+                        self.ensure_model_loaded(component.split(":", 1)[1])
+                    else:
+                        raise ValueError(f"unknown preload component {component!r}")
+                except Exception as error:
+                    print(
+                        "[PredictorWarmup] "
+                        f"component={component} status=FAILED "
+                        f"error_code={type(error).__name__} "
+                        f"elapsed_sec={time.perf_counter() - started:.3f}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "[PredictorWarmup] "
+                        f"component={component} status=COMPLETED "
+                        f"elapsed_sec={time.perf_counter() - started:.3f}",
+                        flush=True,
+                    )
+
+        self._warmup_thread = threading.Thread(
+            target=warm_components,
+            name="audio-worker-model-warmup",
+            daemon=True,
+        )
+        self._warmup_thread.start()
+
+    @staticmethod
+    def _is_resource_exhaustion(error):
+        """Return whether evicting a resident model can plausibly heal a load."""
+        return RESOURCE_EXHAUSTION_PATTERN.search(str(error)) is not None
 
     def predict_punctuation_window(self, request):
         """Run the explicit, diagnostic-only SaT source-window probe."""
@@ -120,25 +188,30 @@ class Predictor:
         reload onto the next chunk — pure churn on the chunk loop's critical
         path, and the medium fallback paid the same penalty.
 
-        If a load fails, evict the least-recently-used resident model and
-        retry (the realistic failure on a healthy worker is VRAM pressure;
-        sniffing CUDA-OOM message strings across ctranslate2 versions is
-        brittle, and the cost of a pointless evict is one later reload).
-        Raises only once nothing is left to evict.
+        If a load fails from classified resource exhaustion, evict the
+        least-recently-used resident model and retry. Auth, artifact, and
+        network failures do not destroy healthy resident models.
         """
         while True:
             try:
                 print(f"Loading model: {model_name} (resident: {list(self.models)})...")
-                loaded_model = WhisperModel(
-                    model_name,
-                    device="cuda" if rp_cuda.is_available() else "cpu",
-                    compute_type="float16" if rp_cuda.is_available() else "int8",
-                )
+                with serialized_model_load(f"whisper:{model_name}"):
+                    loaded_model = WhisperModel(
+                        model_name,
+                        device="cuda" if rp_cuda.is_available() else "cpu",
+                        compute_type="float16" if rp_cuda.is_available() else "int8",
+                        revision=WHISPER_MODEL_REVISIONS[model_name],
+                        local_files_only=True,
+                    )
                 self.models[model_name] = loaded_model
                 print(f"Model {model_name} loaded successfully.")
                 return loaded_model
             except Exception as e:
-                if self.models:
+                # Evicting every healthy model cannot repair an invalid artifact,
+                # auth failure, or network error. It only creates reload churn and
+                # turns one failure into several slow jobs. Restrict LRU eviction
+                # to failures that can actually be healed by freeing VRAM.
+                if self.models and self._is_resource_exhaustion(e):
                     evicted = next(iter(self.models))
                     del self.models[evicted]
                     gc.collect()
@@ -147,7 +220,7 @@ class Predictor:
                         f"model {evicted}, retrying..."
                     )
                     continue
-                print(f"Error loading model {model_name}: {e}")
+                print(f"Error loading model {model_name}: {type(e).__name__}")
                 raise ValueError(f"Failed to load model {model_name}: {e}") from e
 
     def ensure_model_loaded(self, model_name):
@@ -260,10 +333,11 @@ class Predictor:
         # CPU-heavy half (librosa 48kHz decode + mel featurization of ~120
         # windows) overlaps Whisper's GPU decode, and the GPU halves interleave
         # on separate streams; run serially it added ~5s per 2-minute chunk.
-        # score() catches all exceptions and returns None (fail-soft), so the
-        # thread itself can never raise.
+        # score() catches ordinary failures and returns a versioned FAILED
+        # sidecar. The thread boundary below remains a final fail-soft guard.
         clap_thread = None
         clap_result_holder = {}
+        clap_joined = False
         if clap_queries and isinstance(clap_queries, dict) and len(clap_queries) > 0:
             print(
                 f"[AudioSpecialist] Starting CLAP scoring ({len(clap_queries)} queries) "
@@ -271,12 +345,33 @@ class Predictor:
             )
 
             def run_clap_scoring():
-                clap_result_holder["result"] = self.clap_scorer.score(str(audio), clap_queries)
+                try:
+                    clap_result_holder["result"] = self.clap_scorer.score(
+                        str(audio),
+                        clap_queries,
+                    )
+                except Exception as error:
+                    # The scorer is fail-soft by contract. Keep a final guard at
+                    # the thread boundary so a future implementation regression
+                    # can never disappear as an unhandled thread traceback.
+                    clap_result_holder["result"] = {
+                        "schema_version": "w2l-clap-scores-v2",
+                        "status": "FAILED",
+                        "error_code": "CLAP_THREAD_FAILED",
+                        "error": "CLAP_THREAD_FAILED",
+                        "retryable": True,
+                    }
 
             clap_thread = threading.Thread(
                 target=run_clap_scoring, name="clap-scorer", daemon=True
             )
             clap_thread.start()
+
+        def join_clap():
+            nonlocal clap_joined
+            if clap_thread is not None and not clap_joined:
+                clap_thread.join()
+                clap_joined = True
 
         try:
             if temperature_increment_on_fallback is not None:
@@ -357,6 +452,13 @@ class Predictor:
                 # (sub-50ms accuracy vs Whisper's 100-300ms cross-attention timing).
                 # Only runs if explicitly requested via force_align: true input.
                 if force_align and word_timestamps_list:
+                    # CLAP overlaps the CTranslate2 Whisper phase, where the
+                    # latency win is largest. Do not also overlap two resident
+                    # PyTorch acoustic models: that made success depend on GPU
+                    # size and prior traffic because their activation peaks add.
+                    # By this point CLAP is normally already complete, so the
+                    # stability boundary costs little or no wall time.
+                    join_clap()
                     detected_alignment_language = (
                         self.aligner.normalize_language_code(info.language)
                     )
@@ -470,8 +572,7 @@ class Predictor:
                 # CLAP+pyannote GPU overlap. Joining here is usually free
                 # because CLAP has finished during transcription; if it has
                 # not, stability wins over a tiny sidecar latency gain.
-                if clap_thread is not None:
-                    clap_thread.join()
+                join_clap()
                 results["speaker_diarization"] = self.diarizer.diarize(
                     str(audio),
                     results.get("word_timestamps", []),
@@ -483,17 +584,47 @@ class Predictor:
             # never let it outlive this job. Without this join on the exception
             # path it would race the handler's file cleanup and block the next
             # job's CLAP until it finished.
-            if clap_thread is not None:
-                clap_thread.join()
+            join_clap()
 
         if clap_thread is not None:
             clap_result = clap_result_holder.get("result")
-            if clap_result:
+            clap_completed = (
+                isinstance(clap_result, dict)
+                and clap_result.get("status", "COMPLETED") == "COMPLETED"
+                and isinstance(clap_result.get("scores"), dict)
+            )
+            if clap_completed:
                 results["clap_scores"] = clap_result
-                print(f"[AudioSpecialist] CLAP scoring complete: {clap_result['duration']}s, device={clap_result['device']}")
+                print(
+                    "[AudioSpecialist] CLAP scoring complete: "
+                    f"{clap_result.get('duration', 0)}s, "
+                    f"device={clap_result.get('device', 'unknown')}",
+                    flush=True,
+                )
             else:
                 results["clap_scores"] = None
-                print("[AudioSpecialist] CLAP scoring returned no results")
+                if isinstance(clap_result, dict):
+                    # Keep operational failure evidence separate from the
+                    # long-established nullable clap_scores payload. Existing
+                    # consumers remain compatible while retries/alerts can now
+                    # distinguish bad media, OOM, and dependency failures.
+                    results["clap_diagnostics"] = {
+                        key: value
+                        for key, value in clap_result.items()
+                        if key != "scores"
+                    }
+                else:
+                    results["clap_diagnostics"] = {
+                        "schema_version": "w2l-clap-scores-v2",
+                        "status": "FAILED",
+                        "error_code": "CLAP_NO_RESULT",
+                        "retryable": True,
+                    }
+                print(
+                    "[AudioSpecialist] CLAP scoring failed: "
+                    f"error_code={results['clap_diagnostics'].get('error_code')}",
+                    flush=True,
+                )
 
         return results
 

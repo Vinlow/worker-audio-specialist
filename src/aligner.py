@@ -69,6 +69,7 @@ class Wav2Vec2Aligner:
         self.device: Optional[str] = None
         self.word_separator_idx: Optional[int] = None
         self._setup_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
 
     def setup(self, device: str = "cuda"):
         """Load the model. Idempotent — safe to call multiple times."""
@@ -184,6 +185,24 @@ class Wav2Vec2Aligner:
         return re.sub(r"[^A-Za-z']", "", word).upper()
 
     def align(
+        self,
+        audio_path: str,
+        words: List[dict],
+        language_code: str = "en",
+        chunk_sec: float = 60.0,
+        overlap_sec: float = 5.0,
+    ) -> List[dict]:
+        """Serialize inference over the one resident wav2vec2 model instance."""
+        with self._inference_lock:
+            return self._align(
+                audio_path,
+                words,
+                language_code=language_code,
+                chunk_sec=chunk_sec,
+                overlap_sec=overlap_sec,
+            )
+
+    def _align(
         self,
         audio_path: str,
         words: List[dict],
