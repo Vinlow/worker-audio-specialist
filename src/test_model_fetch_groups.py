@@ -98,6 +98,20 @@ class ModelFetchGroupsTest(unittest.TestCase):
         )
         self.assertGreater(dockerfile.index(diarization), secret_run)
         self.assertGreater(secret_run, public_positions[-1])
+        self.assertIn("COPY Dockerfile /Dockerfile", dockerfile)
+        self.assertIn(
+            "COPY LICENSE THIRD_PARTY_MODELS.md "
+            "/usr/share/licenses/audio-worker/",
+            dockerfile,
+        )
+        notice_copy = (
+            "COPY LICENSE THIRD_PARTY_MODELS.md "
+            "/usr/share/licenses/audio-worker/"
+        )
+        self.assertLess(
+            dockerfile.index(diarization),
+            dockerfile.index(notice_copy),
+        )
 
 
 if __name__ == "__main__":

@@ -104,6 +104,15 @@ RUN --mount=type=secret,id=hf_token,required=false \
     fi
 RUN rm /fetch_models.py
 
+# Retain the exact build contract and model attribution in the distributed
+# image. These tiny compliance/audit layers deliberately follow every model
+# layer so documentation changes never invalidate multi-gigabyte downloads.
+COPY Dockerfile /Dockerfile
+COPY LICENSE THIRD_PARTY_MODELS.md /usr/share/licenses/audio-worker/
+RUN install -D -m 0644 \
+    /usr/share/common-licenses/Apache-2.0 \
+    /usr/share/licenses/audio-worker/Apache-2.0.txt
+
 # Runtime is strictly image-resident. Transformers 5.x may otherwise launch a
 # background safetensors conversion lookup even when a loader itself passes
 # local_files_only=True.
