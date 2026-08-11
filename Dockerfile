@@ -76,9 +76,17 @@ RUN pip install --no-cache-dir --constraint /constraints.txt -r /requirements.tx
     python /verify_dependency_lock.py /constraints.txt && \
     rm /verify_dependency_lock.py
 
-# Pre-download all models into the image (no network volume needed)
+# Pre-download all models into the image (no network volume needed). Keep the
+# public model families in small separate layers so each upload stays well
+# below GHCR's per-layer size and time limits. The gated pyannote layer is both
+# small and the only layer that can see the BuildKit secret.
 COPY src/model_manifest.py /model_manifest.py
 COPY builder/fetch_models.py /fetch_models.py
+RUN python /fetch_models.py --group whisper-standard
+RUN python /fetch_models.py --group whisper-large-v3
+RUN python /fetch_models.py --group whisper-turbo
+RUN python /fetch_models.py --group clap-alignment
+RUN python /fetch_models.py --group experimental
 ARG GATED_MODELS_AVAILABLE=true
 RUN --mount=type=secret,id=hf_token,required=false \
     echo "Gated model build cache enabled: ${GATED_MODELS_AVAILABLE}" && \
@@ -89,8 +97,12 @@ RUN --mount=type=secret,id=hf_token,required=false \
     if [[ -s /run/secrets/hf_token ]]; then \
         export HF_TOKEN="$(</run/secrets/hf_token)"; \
     fi && \
-    python /fetch_models.py && \
-    rm /fetch_models.py
+    if [[ "${GATED_MODELS_AVAILABLE}" == "true" ]]; then \
+        python /fetch_models.py --group diarization; \
+    else \
+        echo "Skipping gated pyannote cache by explicit build configuration."; \
+    fi
+RUN rm /fetch_models.py
 
 # Runtime is strictly image-resident. Transformers 5.x may otherwise launch a
 # background safetensors conversion lookup even when a loader itself passes
