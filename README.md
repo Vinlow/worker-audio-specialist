@@ -540,10 +540,13 @@ ordinary loader downloads. The image label and startup log carry the exact
 the GitHub Actions cache; the persistent runner's private local cache is the
 only build cache used by that job.
 
-Test-endpoint rollout is also fail-closed and dry-run by default. It accepts
-only an immutable digest in the locked GHCR repository and verifies the exact
-holy-grale endpoint, template, exclusive binding, and registry credential
-before it can patch anything:
+Test-endpoint rollout is also fail-closed and dry-run by default. The test
+worker is an inline-image RunPod REST v2 serverless endpoint, not a v1
+endpoint-bound template. The helper accepts only an immutable digest in the
+locked GHCR repository, reads `/v2/serverless/dx99xymo20v3o9`, and verifies the
+exact `worker-audio-expert` endpoint identity. It separately locks registry
+credential `GitHub All` (`cmnhowndh00b5l707vr072ars`) through the v2 registry
+resource before it can patch anything:
 
 ```bash
 python scripts/deploy_holy_grale_test.py \
@@ -551,8 +554,13 @@ python scripts/deploy_holy_grale_test.py \
 # Repeat with --apply only after reviewing the dry-run summary.
 ```
 
-The script never targets a production endpoint and never prints template
-environment values or API error bodies.
+On `--apply`, the only PATCH fields are `image` and `registry`. The helper then
+re-reads the endpoint and requires every other documented configuration
+field—including nested worker, scaling, hardware, and environment settings—to
+be unchanged. Server-generated endpoint-version, release, and rollout metadata
+may advance as workers cycle; `updated` confirms the new endpoint configuration,
+not completion of that rolling release. The helper never targets a production
+endpoint and never prints environment values or API response bodies.
 
 ## Based on
 

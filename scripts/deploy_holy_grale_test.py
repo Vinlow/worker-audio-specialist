@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Safely roll an immutable holy-grale image onto the RunPod test endpoint.
 
-The script is deliberately dry-run by default. It updates the endpoint-bound
-template through RunPod's REST API only after verifying every fixed identity,
-name, registry credential, and exclusive endpoint/template binding below.
+The script is deliberately dry-run by default. It updates the image embedded
+in exactly one RunPod REST v2 serverless endpoint only after verifying the
+fixed endpoint and registry-credential identities below.
 """
 
 from __future__ import annotations
@@ -20,18 +20,15 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 
-RUNPOD_API_BASE = "https://rest.runpod.io/v1"
+RUNPOD_API_BASE = "https://api.runpod.io/v2"
 RUNPOD_API_KEY_ENV = "RUNPOD_API_KEY"
 
-TEMPLATE_ID = "3aapcopikw"
-TEMPLATE_NAME = "worker-audio-expert-template"
 ENDPOINT_ID = "dx99xymo20v3o9"
 ENDPOINT_NAME = "worker-audio-expert"
 REGISTRY_AUTH_ID = "cmnhowndh00b5l707vr072ars"
 REGISTRY_AUTH_NAME = "GitHub All"
-TEMPLATE_READ_PATH = (
-    f"/templates/{TEMPLATE_ID}?includeEndpointBoundTemplates=true"
-)
+ENDPOINT_PATH = f"/serverless/{ENDPOINT_ID}"
+REGISTRY_AUTH_PATH = f"/registries/{REGISTRY_AUTH_ID}"
 
 IMAGE_REPOSITORY = "ghcr.io/vinlow/worker-audio-specialist"
 IMAGE_PATTERN = re.compile(
@@ -39,23 +36,25 @@ IMAGE_PATTERN = re.compile(
 )
 MAX_RESPONSE_BYTES = 1024 * 1024
 
-# Values compared before and after a mutation. Secret environment values are
-# compared in memory but are never included in output or exception messages.
-PRESERVED_TEMPLATE_FIELDS = (
-    "category",
-    "containerDiskInGb",
-    "dockerEntrypoint",
-    "dockerStartCmd",
-    "env",
-    "isPublic",
-    "isRunpod",
-    "isServerless",
+# Documented endpoint identity and configuration fields compared before and
+# after PATCH. Server-generated release/rollout metadata is expected to change.
+# Secret environment values stay in memory and are never included in output or
+# exception messages.
+PRESERVED_ENDPOINT_FIELDS = (
+    "id",
     "name",
+    "type",
+    "args",
+    "disk",
     "ports",
-    "readme",
-    "startSsh",
-    "volumeInGb",
-    "volumeMountPath",
+    "env",
+    "gpu",
+    "workers",
+    "scaling",
+    "dataCenterIds",
+    "networkVolumes",
+    "timeout",
+    "flashboot",
 )
 
 
@@ -128,7 +127,7 @@ class RunPodClient:
                 body = response.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as error:
             # Never echo the response body: validation errors can contain
-            # submitted fields and template environment values.
+            # submitted fields and endpoint environment values.
             raise DeploymentError(
                 f"RunPod {method} {path} returned HTTP {error.code}"
             ) from None
@@ -181,21 +180,18 @@ class HolyGraleTestDeployer:
             )
 
     @classmethod
-    def _assert_template(cls, payload: Any) -> Mapping[str, Any]:
-        template = cls._require_mapping(payload, "template")
-        cls._assert_field(template, "id", TEMPLATE_ID, "template")
-        cls._assert_field(template, "name", TEMPLATE_NAME, "template")
-        cls._assert_field(template, "isServerless", True, "template")
-        if not isinstance(template.get("env"), dict):
-            raise DeploymentError("template env was not an object")
-        return template
-
-    @classmethod
     def _assert_endpoint(cls, payload: Any) -> Mapping[str, Any]:
         endpoint = cls._require_mapping(payload, "endpoint")
         cls._assert_field(endpoint, "id", ENDPOINT_ID, "endpoint")
         cls._assert_field(endpoint, "name", ENDPOINT_NAME, "endpoint")
-        cls._assert_field(endpoint, "templateId", TEMPLATE_ID, "endpoint")
+        if not isinstance(endpoint.get("image"), str):
+            raise DeploymentError("endpoint image was not a string")
+        if not isinstance(endpoint.get("env"), dict):
+            raise DeploymentError("endpoint env was not an object")
+        if endpoint.get("registry") is not None and not isinstance(
+            endpoint.get("registry"), str
+        ):
+            raise DeploymentError("endpoint registry was not an ID or null")
         return endpoint
 
     @classmethod
@@ -216,35 +212,13 @@ class HolyGraleTestDeployer:
         return registry
 
     @staticmethod
-    def _assert_exclusive_binding(payload: Any) -> None:
-        if not isinstance(payload, list):
-            raise DeploymentError("RunPod returned an invalid endpoint list")
-        bound_endpoint_ids = []
-        for endpoint in payload:
-            if not isinstance(endpoint, dict):
-                raise DeploymentError(
-                    "RunPod endpoint list contained an invalid entry"
-                )
-            if endpoint.get("templateId") == TEMPLATE_ID:
-                endpoint_id = endpoint.get("id")
-                if not isinstance(endpoint_id, str):
-                    raise DeploymentError(
-                        "template binding contained an invalid endpoint ID"
-                    )
-                bound_endpoint_ids.append(endpoint_id)
-        if bound_endpoint_ids != [ENDPOINT_ID]:
-            raise DeploymentError(
-                "test template is not bound exclusively to the locked endpoint"
-            )
-
-    @staticmethod
     def _configuration_snapshot(
-        template: Mapping[str, Any],
+        endpoint: Mapping[str, Any],
     ) -> dict[str, Any]:
         return {
-            field: copy.deepcopy(template[field])
-            for field in PRESERVED_TEMPLATE_FIELDS
-            if field in template
+            field: copy.deepcopy(endpoint[field])
+            for field in PRESERVED_ENDPOINT_FIELDS
+            if field in endpoint
         }
 
     @classmethod
@@ -260,87 +234,79 @@ class HolyGraleTestDeployer:
         changed_fields = sorted(
             field
             for field in set(before_snapshot) | set(after_snapshot)
-            if before_snapshot.get(field) != after_snapshot.get(field)
+            if field not in before_snapshot
+            or field not in after_snapshot
+            or before_snapshot[field] != after_snapshot[field]
         )
         # Field names are safe; values may contain secrets and stay private.
         raise DeploymentError(
-            "template configuration changed unexpectedly: "
+            "endpoint configuration changed unexpectedly: "
             + ", ".join(changed_fields)
         )
 
-    def _read_and_validate(
-        self,
-    ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    def _read_and_validate(self) -> Mapping[str, Any]:
         endpoint = self._assert_endpoint(
-            self._request_json("GET", f"/endpoints/{ENDPOINT_ID}", None)
-        )
-        template = self._assert_template(
-            self._request_json("GET", TEMPLATE_READ_PATH, None)
+            self._request_json("GET", ENDPOINT_PATH, None)
         )
         self._assert_registry_auth(
             self._request_json(
                 "GET",
-                f"/containerregistryauth/{REGISTRY_AUTH_ID}",
+                REGISTRY_AUTH_PATH,
                 None,
             )
         )
-        self._assert_exclusive_binding(
-            self._request_json("GET", "/endpoints", None)
-        )
-        return endpoint, template
+        return endpoint
 
     def deploy(self, image: str, *, apply: bool = False) -> dict[str, Any]:
         image = self.validate_image(image)
-        _, template_before = self._read_and_validate()
+        endpoint_before = self._read_and_validate()
         already_current = (
-            template_before.get("imageName") == image
-            and template_before.get("containerRegistryAuthId")
-            == REGISTRY_AUTH_ID
+            endpoint_before["image"] == image
+            and endpoint_before.get("registry") == REGISTRY_AUTH_ID
         )
         summary = {
             "mode": "apply" if apply else "dry-run",
             "status": "already-current" if already_current else "planned",
             "endpoint_id": ENDPOINT_ID,
             "endpoint_name": ENDPOINT_NAME,
-            "template_id": TEMPLATE_ID,
-            "template_name": TEMPLATE_NAME,
-            "current_image": template_before.get("imageName"),
+            "current_image": endpoint_before["image"],
             "target_image": image,
             "registry_auth_id": REGISTRY_AUTH_ID,
+            "registry_auth_name": REGISTRY_AUTH_NAME,
             "configuration_preserved": True,
-            "environment_variable_count": len(template_before["env"]),
+            "environment_variable_count": len(endpoint_before["env"]),
         }
         if not apply or already_current:
             return summary
 
-        # PATCH is intentionally partial. Omitting env and every other
-        # template field is what preserves them under the official REST API.
+        # REST v2 PATCH is intentionally partial. Omitting env and every other
+        # endpoint field is what preserves them under the official API.
         self._request_json(
             "PATCH",
-            f"/templates/{TEMPLATE_ID}",
+            ENDPOINT_PATH,
             {
-                "imageName": image,
-                "containerRegistryAuthId": REGISTRY_AUTH_ID,
+                "image": image,
+                "registry": REGISTRY_AUTH_ID,
             },
         )
 
-        _, template_after = self._read_and_validate()
+        endpoint_after = self._read_and_validate()
         self._assert_field(
-            template_after,
-            "imageName",
+            endpoint_after,
+            "image",
             image,
-            "template",
+            "endpoint",
         )
         self._assert_field(
-            template_after,
-            "containerRegistryAuthId",
+            endpoint_after,
+            "registry",
             REGISTRY_AUTH_ID,
-            "template",
+            "endpoint",
         )
-        self._assert_configuration_preserved(template_before, template_after)
+        self._assert_configuration_preserved(endpoint_before, endpoint_after)
         summary["status"] = "updated"
         summary["current_image"] = image
-        summary["environment_variable_count"] = len(template_after["env"])
+        summary["environment_variable_count"] = len(endpoint_after["env"])
         return summary
 
 
@@ -362,7 +328,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="perform the template PATCH after all deployment locks pass",
+        help="perform the endpoint PATCH after all deployment locks pass",
     )
     return parser
 
@@ -381,7 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     print(json.dumps(summary, sort_keys=True))
     if not args.apply and summary["status"] != "already-current":
-        print("dry-run only; pass --apply to mutate the locked test template")
+        print("dry-run only; pass --apply to mutate the locked test endpoint")
     return 0
 
 
