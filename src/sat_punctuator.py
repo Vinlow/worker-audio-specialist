@@ -11,7 +11,6 @@ from __future__ import annotations
 from functools import lru_cache
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import struct
@@ -43,9 +42,8 @@ SAT_STRIDE_TOKENS = 64
 SAT_PADDED_BATCH_SIZE = 8
 SAT_LAUNCH_LANGUAGES = frozenset({"en", "de", "fr", "es", "pt", "it"})
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
-WORKER_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 SAT_SOURCE_CONTRACT_KIND = (
-    "w2l-worker-audio-specialist-sat-punctuation-source-contract-v1"
+    "w2l-worker-audio-specialist-sat-punctuation-source-contract-v2"
 )
 SAT_SOURCE_CONTRACT_ROUTE = "sat_punctuation_batch_probe"
 SAT_SOURCE_CONTRACT_FILES = {
@@ -64,31 +62,23 @@ def canonical_json(value) -> str:
     )
 
 
-def worker_git_sha() -> str:
-    """Return the immutable image build SHA or an explicit unknown marker."""
-    value = os.environ.get("AUDIO_WORKER_BUILD_SHA", "").strip().lower()
-    return value if WORKER_GIT_SHA.fullmatch(value) else "unknown"
-
-
-def git_blob_sha1(path: Path) -> str:
-    """Recreate Git's text-blob identity from the exact shipped source."""
+def normalized_source_sha256(path: Path) -> str:
+    """Hash the exact shipped source after Git-compatible CRLF normalization."""
     payload = path.read_bytes().replace(b"\r\n", b"\n")
-    header = f"blob {len(payload)}\0".encode("ascii")
-    return hashlib.sha1(header + payload).hexdigest()
+    return hashlib.sha256(payload).hexdigest()
 
 
-@lru_cache(maxsize=8)
-def source_contract_id(build_sha: str) -> str:
-    """Bind the SaT route to one build and its three executable sources."""
+@lru_cache(maxsize=1)
+def source_contract_id() -> str:
+    """Bind the SaT route to its three exact executable source files."""
     body = {
         "kind": SAT_SOURCE_CONTRACT_KIND,
-        "workerGitSha": build_sha,
         "route": SAT_SOURCE_CONTRACT_ROUTE,
         "requestSchema": SAT_BATCH_REQUEST_SCHEMA_VERSION,
         "batchResponseSchema": SAT_BATCH_RESPONSE_SCHEMA_VERSION,
         "windowResponseSchema": SAT_RESPONSE_SCHEMA_VERSION,
         "sourceBlobs": {
-            name: git_blob_sha1(path)
+            name: normalized_source_sha256(path)
             for name, path in SAT_SOURCE_CONTRACT_FILES.items()
         },
     }
@@ -495,15 +485,13 @@ class SaTPunctuator:
         }
 
     def _implementation(self) -> dict:
-        build_sha = worker_git_sha()
         return {
             "wtpsplitVersion": SAT_WTPSPLIT_VERSION,
             "skopsVersion": SAT_SKOPS_VERSION,
             "transformersVersion": SAT_TRANSFORMERS_VERSION,
             "snapshot": self.snapshot,
             "languageAuthority": "CALLER_ASSERTED_NOT_MODEL_VERIFIED",
-            "workerGitSha": build_sha,
-            "sourceContractId": source_contract_id(build_sha),
+            "sourceContractId": source_contract_id(),
         }
 
     def _infer_normalized_windows(self, normalized_windows):

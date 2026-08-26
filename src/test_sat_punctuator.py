@@ -1,5 +1,4 @@
 import unittest
-from unittest import mock
 
 from sat_punctuator import (
     SAT_BATCH_REQUEST_SCHEMA_VERSION,
@@ -10,13 +9,12 @@ from sat_punctuator import (
     SAT_TOKENIZER_ID,
     SAT_TOKENIZER_REVISION,
     SaTPunctuator,
-    git_blob_sha1,
+    normalized_source_sha256,
     normalize_language,
     source_contract_id,
     token_sha256,
     validate_batch_request,
     validate_probe_request,
-    worker_git_sha,
 )
 
 
@@ -97,24 +95,17 @@ def batch_request_for():
 
 
 class SaTPunctuatorContractTest(unittest.TestCase):
-    def test_implementation_binds_build_and_exact_source_contract(self):
-        build_sha = "a" * 40
+    def test_implementation_binds_exact_source_contract(self):
         punctuator = SaTPunctuator()
         punctuator.snapshot = {
             "model": {"manifestSha256": "b" * 64},
             "tokenizer": {"manifestSha256": "c" * 64},
         }
 
-        with mock.patch.dict(
-            "os.environ",
-            {"AUDIO_WORKER_BUILD_SHA": build_sha},
-            clear=False,
-        ):
-            implementation = punctuator._implementation()
+        implementation = punctuator._implementation()
 
-        self.assertEqual(build_sha, implementation["workerGitSha"])
         self.assertEqual(
-            source_contract_id(build_sha),
+            source_contract_id(),
             implementation["sourceContractId"],
         )
         self.assertRegex(
@@ -122,20 +113,10 @@ class SaTPunctuatorContractTest(unittest.TestCase):
             r"^sha256:[0-9a-f]{64}$",
         )
 
-    def test_source_contract_uses_git_normalized_source_blobs(self):
+    def test_source_contract_uses_normalized_sha256_source_blobs(self):
         source = __import__("sat_punctuator").SAT_SOURCE_CONTRACT_FILES
         for path in source.values():
-            self.assertRegex(git_blob_sha1(path), r"^[0-9a-f]{40}$")
-
-    def test_missing_or_invalid_build_sha_stays_explicitly_unknown(self):
-        with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertEqual("unknown", worker_git_sha())
-        with mock.patch.dict(
-            "os.environ",
-            {"AUDIO_WORKER_BUILD_SHA": "not-a-commit"},
-            clear=True,
-        ):
-            self.assertEqual("unknown", worker_git_sha())
+            self.assertRegex(normalized_source_sha256(path), r"^[0-9a-f]{64}$")
 
     def test_language_is_primary_subtag_and_launch_gated(self):
         self.assertEqual("es", normalize_language("es-ES"))
