@@ -35,7 +35,7 @@ jobs:
           git fetch --no-tags origin +refs/heads/holy-grale:refs/remotes/origin/holy-grale
           git merge-base --is-ancestor "$EXPECTED_SHA" origin/holy-grale
           if [[ "$BUILDER_READY" != "true" ]]; then
-            echo "AUDIO_WORKER_BUILDER_READY is not true. Keep the release fuse closed until a registered Linux x64 DO runner passes the documented bootstrap checks." >&2
+            echo "AUDIO_WORKER_BUILDER_READY is not true. Keep the release fuse closed until a registered Linux x64 audio-worker-builder runner passes the documented bootstrap checks." >&2
             exit 1
           fi
       - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
@@ -48,7 +48,8 @@ jobs:
 
   image-release:
     needs: preflight
-    runs-on: [self-hosted, linux, x64, DO]
+    runs-on: [self-hosted, linux, x64, audio-worker-builder]
+    environment: Production
     timeout-minutes: 180
     permissions:
       contents: read
@@ -76,6 +77,14 @@ jobs:
             exit 1
           fi
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          name: audio-worker-buildkit
+          driver: docker-container
+          driver-opts: |
+            memory=64g
+            memory-swap=72g
+            cpuset-cpus=0-15
+          keep-state: true
       - name: Authenticate to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -101,12 +110,18 @@ jobs:
       - name: Run every unit and contract test inside the image
         run: >-
           docker run --rm
+          --cpus 16
+          --memory 64g
+          --memory-swap 72g
           --entrypoint python
           "$IMAGE_TAG"
           -m unittest discover -v -s / -p 'test_*.py'
       - name: Load the baked diarizer fully offline
         run: >-
           docker run --rm --network none
+          --cpus 16
+          --memory 64g
+          --memory-swap 72g
           -e AUDIO_WORKER_REAL_MODEL_SMOKE=1
           --entrypoint python
           "$IMAGE_TAG"
@@ -114,6 +129,9 @@ jobs:
       - name: Score real audio with baked CLAP fully offline
         run: >-
           docker run --rm --network none
+          --cpus 16
+          --memory 64g
+          --memory-swap 72g
           -e AUDIO_WORKER_REAL_MODEL_SMOKE=1
           --entrypoint python
           "$IMAGE_TAG"
@@ -142,3 +160,6 @@ jobs:
           path: release-receipt.json
           if-no-files-found: error
           retention-days: 90
+      - name: Remove the mutable local release image
+        if: always()
+        run: docker image rm "$IMAGE_TAG" || true

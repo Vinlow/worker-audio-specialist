@@ -538,11 +538,15 @@ An image release is now an explicit, two-stage operation through
 1. Enter an exact 40-character commit that is already on `holy-grale`.
 2. The hosted preflight re-runs the source gates and refuses unless the
    repository variable `AUDIO_WORKER_BUILDER_READY` is exactly `true`.
-3. A registered `[self-hosted, linux, x64, DO]` runner must prove that Docker,
+3. A registered `[self-hosted, linux, x64, audio-worker-builder]` runner must
+   prove that Docker,
    Buildx, and at least 100 GiB under Docker's storage root are available.
-4. The runner builds the exact commit locally and runs the full in-image suite,
+4. BuildKit and all test containers are capped at 16 CPUs and 64 GiB RAM so
+   the shared Studio host retains operational headroom. The named persistent
+   BuildKit builder keeps its private local cache between releases.
+5. The runner builds the exact commit locally and runs the full in-image suite,
    offline diarizer smoke, and offline CLAP smoke.
-5. Only a completely green image is pushed to GHCR. The workflow records the
+6. Only a completely green image is pushed to GHCR. The workflow records the
    resulting immutable `repository@sha256:...` reference in a 90-day release
    receipt. Publishing never deploys the endpoint.
 
@@ -579,7 +583,9 @@ python scripts/deploy_holy_grale_test.py \
 ```
 
 The equivalent GitHub entry point is `Deploy | Holy Grale test endpoint` in the
-`runpod-test` environment. It always performs the read-only plan first. Applying
+shared `Production` environment. The environment is a credential scope, not a
+claim that this locked test endpoint is production. It always performs the
+read-only plan first. Applying
 requires the immutable release image, the release's source commit, the exact
 freshly observed current image, the literal endpoint ID, and the explicit
 `apply` checkbox. The secret-bearing job checks out deployment tooling only

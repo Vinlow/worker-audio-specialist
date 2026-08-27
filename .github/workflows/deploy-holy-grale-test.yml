@@ -36,7 +36,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: runpod-test
+    environment: Production
     env:
       RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
       WORKER_COMMIT_SHA: ${{ inputs.worker_commit_sha }}
