@@ -120,6 +120,7 @@ ARG AUDIO_WORKER_BUILD_SHA=unknown
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
 ENV AUDIO_WORKER_BUILD_SHA=${AUDIO_WORKER_BUILD_SHA}
+LABEL org.opencontainers.image.source="https://github.com/Vinlow/worker-audio-specialist"
 LABEL org.opencontainers.image.revision=${AUDIO_WORKER_BUILD_SHA}
 
 # Retain the source used to build the baked model set so the runtime image's
