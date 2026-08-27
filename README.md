@@ -525,13 +525,32 @@ docker run --rm --network none -e AUDIO_WORKER_REAL_MODEL_SMOKE=1 \
   -m unittest -v test_clap_real_model
 ```
 
-The `CI | Holy Grale worker gate` workflow gives every pull request a hosted
-compile gate without exposing the gated-model secret or persistent runner.
-Trusted `holy-grale` pushes and manual runs additionally use the large
-self-hosted `DO` runner for the exact image build, dependency check, in-image
-unit/contract suite, and token-free/network-disabled CLAP and pyannote smokes.
-That image gate runs only while the `DO` runner is online; local execution of
-the commands above is the release gate when it is unavailable.
+`CI | Holy Grale source gate` runs the compile and deployment-tool unit gates
+on GitHub-hosted infrastructure for every pull request and trusted branch push.
+It deliberately does **not** build the image. GitHub's standard hosted runner
+has only 14 GB of SSD storage, while this model-baking build needs substantially
+more. The former `runs-on: DO` push jobs had no registered runner and therefore
+sat queued until GitHub's 24-hour timeout instead of building anything.
+
+An image release is now an explicit, two-stage operation through
+`Release | Build and publish Holy Grale image`:
+
+1. Enter an exact 40-character commit that is already on `holy-grale`.
+2. The hosted preflight re-runs the source gates and refuses unless the
+   repository variable `AUDIO_WORKER_BUILDER_READY` is exactly `true`.
+3. A registered `[self-hosted, linux, x64, DO]` runner must prove that Docker,
+   Buildx, and at least 100 GiB under Docker's storage root are available.
+4. The runner builds the exact commit locally and runs the full in-image suite,
+   offline diarizer smoke, and offline CLAP smoke.
+5. Only a completely green image is pushed to GHCR. The workflow records the
+   resulting immutable `repository@sha256:...` reference in a 90-day release
+   receipt. Publishing never deploys the endpoint.
+
+Keep `AUDIO_WORKER_BUILDER_READY` unset or `false` until a builder is actually
+registered and has passed the documented bootstrap checks. Do not turn the
+variable into a ceremonial bypass: it is the fail-fast replacement for the old
+24-hour queue. The complete builder lifecycle and release procedure live in the
+[Web2Labs operator runbook](https://git.web2labs.dev/web2labs/web2labs/-/blob/main/docs/operations/runpod-audio-worker.md).
 
 Runtime sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` globally after
 the model-baking layer, preventing background Hub conversion checks as well as
@@ -540,27 +559,39 @@ ordinary loader downloads. The image label and startup log carry the exact
 the GitHub Actions cache; the persistent runner's private local cache is the
 only build cache used by that job.
 
-Test-endpoint rollout is also fail-closed and dry-run by default. The test
-worker is an inline-image RunPod REST v2 serverless endpoint, not a v1
-endpoint-bound template. The helper accepts only an immutable digest in the
-locked GHCR repository, reads `/v2/serverless/dx99xymo20v3o9`, and verifies the
-exact `worker-audio-expert` endpoint identity. It separately locks registry
-credential `GitHub All` (`cmnhowndh00b5l707vr072ars`) through the v2 registry
-resource before it can patch anything:
+Test-endpoint rollout is a separate, fail-closed operation and is dry-run by
+default. RunPod endpoint `worker-audio-expert` (`dx99xymo20v3o9`) is bound to
+REST v1 template `worker-audio-expert-template` (`3aapcopikw`). The helper
+accepts only an immutable digest in the locked GHCR repository. It verifies the
+endpoint, template, exclusive endpoint-to-template binding, and registry
+credential `GitHub All` (`cmnhowndh00b5l707vr072ars`) before it can patch
+anything:
 
 ```bash
 python scripts/deploy_holy_grale_test.py \
   --image ghcr.io/vinlow/worker-audio-specialist@sha256:<digest>
-# Repeat with --apply only after reviewing the dry-run summary.
+# Copy current_image from this fresh dry-run, then apply only with all locks:
+python scripts/deploy_holy_grale_test.py \
+  --image ghcr.io/vinlow/worker-audio-specialist@sha256:<digest> \
+  --apply \
+  --expected-current-image ghcr.io/vinlow/worker-audio-specialist@sha256:<current> \
+  --confirm-endpoint dx99xymo20v3o9
 ```
 
-On `--apply`, the only PATCH fields are `image` and `registry`. The helper then
-re-reads the endpoint and requires every other documented configuration
-field—including nested worker, scaling, hardware, and environment settings—to
-be unchanged. Server-generated endpoint-version, release, and rollout metadata
-may advance as workers cycle; `updated` confirms the new endpoint configuration,
-not completion of that rolling release. The helper never targets a production
-endpoint and never prints environment values or API response bodies.
+The equivalent GitHub entry point is `Deploy | Holy Grale test endpoint` in the
+`runpod-test` environment. It always performs the read-only plan first. Applying
+requires the immutable release image, the release's source commit, the exact
+freshly observed current image, the literal endpoint ID, and the explicit
+`apply` checkbox. The secret-bearing job checks out deployment tooling only
+from the trusted `holy-grale` branch; it never executes arbitrary supplied code.
+
+On apply, the only REST v1 template PATCH fields are `imageName` and
+`containerRegistryAuthId`. The helper then re-reads the topology and requires
+all preserved template configuration—including the environment object—to be
+unchanged. `updated` confirms the template mutation, not completion of worker
+replacement or a successful application-level canary. The helper never targets
+a production endpoint and never prints environment values or API response
+bodies.
 
 ## Based on
 

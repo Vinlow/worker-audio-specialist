@@ -1,12 +1,10 @@
-name: CI | Holy Grale worker gate
+name: CI | Holy Grale source gate
 
 on:
   push:
     branches: [holy-grale, main]
   pull_request:
     branches: [holy-grale, main]
-  workflow_dispatch:
-
 concurrency:
   group: audio-worker-holy-grale-${{ github.ref }}
   cancel-in-progress: true
@@ -22,50 +20,10 @@ jobs:
           python-version: "3.10"
       - name: Compile every worker and builder module
         run: python -m compileall -q src builder scripts
+      - name: Verify locked deployment tooling
+        run: python -m unittest -v scripts.test_deploy_holy_grale_test
 
-  image-test:
-    # Never expose the gated-model secret or a persistent self-hosted runner to
-    # code from pull requests.  PRs still receive the hosted static gate.
-    if: github.event_name != 'pull_request'
-    needs: static
-    runs-on: DO
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Require gated-model build credentials
-        env:
-          AUDIO_WORKER_HF_TOKEN: ${{ secrets.HF_TOKEN || secrets.HUGGINGFACE_TOKEN }}
-        run: test -n "$AUDIO_WORKER_HF_TOKEN"
-      - name: Build the exact deployable image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          load: true
-          push: false
-          tags: web2labs/audio-worker-test:${{ github.sha }}
-          build-args: |
-            GATED_MODELS_AVAILABLE=${{ secrets.HF_TOKEN != '' || secrets.HUGGINGFACE_TOKEN != '' }}
-            AUDIO_WORKER_BUILD_SHA=${{ github.sha }}
-          secrets: |
-            hf_token=${{ secrets.HF_TOKEN || secrets.HUGGINGFACE_TOKEN }}
-      - name: Run unit and contract tests inside the built image
-        run: >-
-          docker run --rm
-          --entrypoint python
-          web2labs/audio-worker-test:${{ github.sha }}
-          -m unittest discover -v -s / -p 'test_*.py'
-      - name: Load and run the baked diarizer fully offline
-        run: >-
-          docker run --rm --network none
-          -e AUDIO_WORKER_REAL_MODEL_SMOKE=1
-          --entrypoint python
-          web2labs/audio-worker-test:${{ github.sha }}
-          -m unittest -v test_diarizer_real_model
-      - name: Score real audio with baked CLAP fully offline
-        run: >-
-          docker run --rm --network none
-          -e AUDIO_WORKER_REAL_MODEL_SMOKE=1
-          --entrypoint python
-          web2labs/audio-worker-test:${{ github.sha }}
-          -m unittest -v test_clap_real_model
+      # Image builds are deliberately NOT scheduled by a push. The image is too
+      # large for GitHub's standard 14 GB runner and silently queued for 24 hours
+      # when the old `DO` label had no registered runner. Use the explicit
+      # `Release | Build and publish Holy Grale image` workflow instead.

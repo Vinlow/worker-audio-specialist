@@ -17,7 +17,7 @@ jobs:
     name: Check python requirements file and update
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Check for new package version and update
         run: |
@@ -57,7 +57,7 @@ jobs:
           echo "requirements.txt has been updated."
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v3
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: Update runpod package version

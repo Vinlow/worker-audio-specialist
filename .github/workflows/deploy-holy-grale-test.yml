@@ -1,0 +1,84 @@
+name: Deploy | Holy Grale test endpoint
+
+on:
+  workflow_dispatch:
+    inputs:
+      worker_commit_sha:
+        description: Exact 40-character commit used to build the image
+        required: true
+        type: string
+      image:
+        description: Immutable GHCR image (repository@sha256:digest)
+        required: true
+        type: string
+      expected_current_image:
+        description: Current immutable image copied from a fresh dry-run; required on apply
+        required: false
+        type: string
+      confirm_endpoint:
+        description: Type the locked endpoint ID dx99xymo20v3o9; required on apply
+        required: false
+        type: string
+      apply:
+        description: Patch the test template after the dry-run passes
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-worker-holy-grale-test-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: runpod-test
+    env:
+      RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+      WORKER_COMMIT_SHA: ${{ inputs.worker_commit_sha }}
+      TARGET_IMAGE: ${{ inputs.image }}
+      EXPECTED_CURRENT_IMAGE: ${{ inputs.expected_current_image }}
+      CONFIRM_ENDPOINT: ${{ inputs.confirm_endpoint }}
+      APPLY_REQUESTED: ${{ inputs.apply }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          # Run secret-bearing deployment code only from the trusted branch.
+          # The worker image's source commit is validated separately below.
+          ref: holy-grale
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.10"
+      - name: Lock deployment inputs and tooling
+        run: |
+          set -euo pipefail
+          [[ "$WORKER_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin +refs/heads/holy-grale:refs/remotes/origin/holy-grale
+          git merge-base --is-ancestor "$WORKER_COMMIT_SHA" origin/holy-grale
+          test -n "$RUNPOD_API_KEY"
+          if [[ "$APPLY_REQUESTED" == "true" ]]; then
+            test "$CONFIRM_ENDPOINT" = "dx99xymo20v3o9"
+          fi
+          python -m unittest -v scripts.test_deploy_holy_grale_test
+      - name: Read and validate the live deployment plan
+        run: >-
+          python scripts/deploy_holy_grale_test.py
+          --image "$TARGET_IMAGE"
+      - name: Apply the locked template update
+        if: ${{ inputs.apply }}
+        run: >-
+          python scripts/deploy_holy_grale_test.py
+          --image "$TARGET_IMAGE"
+          --apply
+          --expected-current-image "$EXPECTED_CURRENT_IMAGE"
+          --confirm-endpoint "$CONFIRM_ENDPOINT"
+      - name: Re-read the target after apply
+        if: ${{ inputs.apply }}
+        run: >-
+          python scripts/deploy_holy_grale_test.py
+          --image "$TARGET_IMAGE"
