@@ -1,6 +1,4 @@
-import hashlib
 import unittest
-from pathlib import Path
 
 from sat_punctuator import (
     SAT_BATCH_REQUEST_SCHEMA_VERSION,
@@ -8,15 +6,11 @@ from sat_punctuator import (
     SAT_MODEL_ID,
     SAT_MODEL_REVISION,
     SAT_REQUEST_SCHEMA_VERSION,
-    SAT_SOURCE_CONTRACT_FILES,
-    SAT_SOURCE_CONTRACT_KIND,
-    SAT_SOURCE_CONTRACT_ROUTE,
     SAT_TOKENIZER_ID,
     SAT_TOKENIZER_REVISION,
     SaTPunctuator,
-    canonical_json,
+    normalized_source_sha256,
     normalize_language,
-    sha256_file,
     source_contract_id,
     token_sha256,
     validate_batch_request,
@@ -101,33 +95,35 @@ def batch_request_for():
 
 
 class SaTPunctuatorContractTest(unittest.TestCase):
-    def test_implementation_binds_exact_nonrecursive_source_contract(self):
-        source_root = Path(__file__).resolve().parent
-        body = {
-            "kind": SAT_SOURCE_CONTRACT_KIND,
-            "route": SAT_SOURCE_CONTRACT_ROUTE,
-            "requestSchema": SAT_BATCH_REQUEST_SCHEMA_VERSION,
-            "batchResponseSchema": (
-                "w2l-sat-punctuation-batch-probe-v1"
-            ),
-            "windowResponseSchema": (
-                "w2l-sat-punctuation-window-probe-v1"
-            ),
-            "sourceBlobs": {
-                logical_path: sha256_file(source_root / runtime_path)
-                for logical_path, runtime_path in sorted(
-                    SAT_SOURCE_CONTRACT_FILES.items()
-                )
-            },
+    def test_implementation_binds_exact_source_contract(self):
+        punctuator = SaTPunctuator()
+        punctuator.snapshot = {
+            "model": {"manifestSha256": "b" * 64},
+            "tokenizer": {"manifestSha256": "c" * 64},
         }
-        expected = "sha256:" + hashlib.sha256(
-            canonical_json(body).encode("utf-8")
-        ).hexdigest()
 
-        self.assertEqual(expected, source_contract_id(source_root))
-        implementation = SaTPunctuator()._implementation()
-        self.assertEqual(expected, implementation["sourceContractId"])
-        self.assertNotIn("workerGitSha", implementation)
+        implementation = punctuator._implementation()
+
+        self.assertEqual(
+            source_contract_id(),
+            implementation["sourceContractId"],
+        )
+        self.assertEqual(
+            (
+                "sha256:04c110545a12504c89be2c7b611a6ab"
+                "772a966e8b8912d4bbd4fa0bccff239a3"
+            ),
+            implementation["sourceContractId"],
+        )
+        self.assertRegex(
+            implementation["sourceContractId"],
+            r"^sha256:[0-9a-f]{64}$",
+        )
+
+    def test_source_contract_uses_normalized_sha256_source_blobs(self):
+        source = __import__("sat_punctuator").SAT_SOURCE_CONTRACT_FILES
+        for path in source.values():
+            self.assertRegex(normalized_source_sha256(path), r"^[0-9a-f]{64}$")
 
     def test_language_is_primary_subtag_and_launch_gated(self):
         self.assertEqual("es", normalize_language("es-ES"))

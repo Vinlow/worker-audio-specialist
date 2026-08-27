@@ -1,0 +1,9 @@
+.git
+.github
+.env
+.env.*
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+jobs
+output

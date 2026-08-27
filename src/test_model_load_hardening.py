@@ -8,7 +8,6 @@ from unittest.mock import patch
 import torch
 from aligner import MAX_META_LOAD_ATTEMPTS, Wav2Vec2Aligner
 from clap_scorer import ClapScorer
-from transformers.integrations.accelerate import init_empty_weights
 
 
 class _FakeWavModel:
@@ -84,11 +83,12 @@ class ModelLoadHardeningTest(unittest.TestCase):
         class FakeClapModel:
             @classmethod
             def from_pretrained(cls, *_args, **_kwargs):
-                # This is the real process-global context used by current
-                # Transformers from_pretrained. Without the worker's shared
-                # load lock, a torchaudio model constructed in the other
-                # thread inherits meta parameters.
-                with init_empty_weights():
+                # Exercise the same transient meta-device construction state
+                # without depending on Transformers' optional `accelerate`
+                # integration.  Transformers 5.x no longer exports its old
+                # helper, while PyTorch's native context preserves the load
+                # boundary this regression is meant to cover.
+                with torch.device("meta"):
                     clap_entered.set()
                     if not release_clap.wait(timeout=2):
                         raise RuntimeError("test coordination timeout")

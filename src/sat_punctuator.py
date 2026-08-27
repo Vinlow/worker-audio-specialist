@@ -8,6 +8,7 @@ it never owns transcript text, word geometry, Natural Landing, or cuts.
 
 from __future__ import annotations
 
+from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
@@ -40,16 +41,16 @@ SAT_CONTENT_WINDOW_TOKENS = 510
 SAT_STRIDE_TOKENS = 64
 SAT_PADDED_BATCH_SIZE = 8
 SAT_LAUNCH_LANGUAGES = frozenset({"en", "de", "fr", "es", "pt", "it"})
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SAT_SOURCE_CONTRACT_KIND = (
     "w2l-worker-audio-specialist-sat-punctuation-source-contract-v2"
 )
 SAT_SOURCE_CONTRACT_ROUTE = "sat_punctuation_batch_probe"
 SAT_SOURCE_CONTRACT_FILES = {
-    "src/predict.py": "predict.py",
-    "src/rp_handler.py": "rp_handler.py",
-    "src/sat_punctuator.py": "sat_punctuator.py",
+    "src/predict.py": Path(__file__).with_name("predict.py"),
+    "src/rp_handler.py": Path(__file__).with_name("rp_handler.py"),
+    "src/sat_punctuator.py": Path(__file__),
 }
-SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
 def canonical_json(value) -> str:
@@ -59,6 +60,31 @@ def canonical_json(value) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def normalized_source_sha256(path: Path) -> str:
+    """Hash the exact shipped source after Git-compatible CRLF normalization."""
+    payload = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(payload).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def source_contract_id() -> str:
+    """Bind the SaT route to its three exact executable source files."""
+    body = {
+        "kind": SAT_SOURCE_CONTRACT_KIND,
+        "route": SAT_SOURCE_CONTRACT_ROUTE,
+        "requestSchema": SAT_BATCH_REQUEST_SCHEMA_VERSION,
+        "batchResponseSchema": SAT_BATCH_RESPONSE_SCHEMA_VERSION,
+        "windowResponseSchema": SAT_RESPONSE_SCHEMA_VERSION,
+        "sourceBlobs": {
+            name: normalized_source_sha256(path)
+            for name, path in SAT_SOURCE_CONTRACT_FILES.items()
+        },
+    }
+    return "sha256:" + hashlib.sha256(
+        canonical_json(body).encode("utf-8")
+    ).hexdigest()
 
 
 def token_bytes(token_ids) -> bytes:
@@ -320,37 +346,6 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def source_contract_id(source_root=None) -> str:
-    """Bind the deployed SaT route to the exact executable source bytes.
-
-    The manifest deliberately excludes a Git SHA: embedding a commit that
-    contains its own expected commit is recursive. The caller pins this
-    content ID, which covers the route, schemas, and every source file that
-    can construct or serve the probe.
-    """
-    root = (
-        Path(source_root)
-        if source_root is not None
-        else Path(__file__).resolve().parent
-    )
-    body = {
-        "kind": SAT_SOURCE_CONTRACT_KIND,
-        "route": SAT_SOURCE_CONTRACT_ROUTE,
-        "requestSchema": SAT_BATCH_REQUEST_SCHEMA_VERSION,
-        "batchResponseSchema": SAT_BATCH_RESPONSE_SCHEMA_VERSION,
-        "windowResponseSchema": SAT_RESPONSE_SCHEMA_VERSION,
-        "sourceBlobs": {
-            logical_path: sha256_file(root / runtime_path)
-            for logical_path, runtime_path in sorted(
-                SAT_SOURCE_CONTRACT_FILES.items()
-            )
-        },
-    }
-    return "sha256:" + hashlib.sha256(
-        canonical_json(body).encode("utf-8")
-    ).hexdigest()
-
-
 def snapshot_identity(path: Path, allowed_paths) -> dict:
     files = []
     for relative_path in sorted(allowed_paths):
@@ -385,7 +380,6 @@ class SaTPunctuator:
         self.snapshot = None
         self.model_dtype = None
         self.load_seconds = None
-        self.source_contract_id = source_contract_id()
         self._setup_lock = threading.Lock()
         self._inference_lock = threading.Lock()
 
@@ -497,7 +491,7 @@ class SaTPunctuator:
             "transformersVersion": SAT_TRANSFORMERS_VERSION,
             "snapshot": self.snapshot,
             "languageAuthority": "CALLER_ASSERTED_NOT_MODEL_VERIFIED",
-            "sourceContractId": self.source_contract_id,
+            "sourceContractId": source_contract_id(),
         }
 
     def _infer_normalized_windows(self, normalized_windows):

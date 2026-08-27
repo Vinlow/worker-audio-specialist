@@ -6,6 +6,7 @@ because that triggers runpod's auto-test-mode at import.
 Used for the NP-SBV2 multi-clip local test.
 """
 import json
+import os
 import sys
 import base64
 import tempfile
@@ -49,33 +50,39 @@ def main() -> int:
     audio_path = base64_to_tempfile(job_input["audio_base64"])
     print(f"[local_run] running predict on {audio_path}", flush=True)
 
-    result = p.predict(
-        audio=audio_path,
-        model_name=job_input.get("model", "large-v3"),
-        transcription=job_input.get("transcription", "plain_text"),
-        translation=job_input.get("translation"),
-        translate=job_input.get("translate", False),
-        language=job_input.get("language"),
-        temperature=job_input.get("temperature", 0),
-        best_of=job_input.get("best_of", 5),
-        beam_size=job_input.get("beam_size", 5),
-        patience=job_input.get("patience", 1.0),
-        length_penalty=job_input.get("length_penalty", 0.0),
-        suppress_tokens=job_input.get("suppress_tokens", "-1"),
-        initial_prompt=job_input.get("initial_prompt"),
-        condition_on_previous_text=job_input.get("condition_on_previous_text", True),
-        temperature_increment_on_fallback=job_input.get("temperature_increment_on_fallback", 0.2),
-        compression_ratio_threshold=job_input.get("compression_ratio_threshold", 2.4),
-        logprob_threshold=job_input.get("logprob_threshold", -1.0),
-        no_speech_threshold=job_input.get("no_speech_threshold", 0.6),
-        enable_vad=job_input.get("enable_vad", False),
-        word_timestamps=job_input.get("word_timestamps", False),
-        clap_queries=job_input.get("clap_queries"),
-        force_align=job_input.get("force_align", False),
-        diarize=job_input.get("diarize", False),
-        diarize_min_speakers=job_input.get("diarize_min_speakers") or None,
-        diarize_max_speakers=job_input.get("diarize_max_speakers") or None,
-    )
+    try:
+        result = p.predict(
+            audio=audio_path,
+            model_name=job_input.get("model", "large-v3"),
+            transcription=job_input.get("transcription", "plain_text"),
+            translation=job_input.get("translation"),
+            translate=job_input.get("translate", False),
+            language=job_input.get("language"),
+            temperature=job_input.get("temperature", 0),
+            best_of=job_input.get("best_of", 5),
+            beam_size=job_input.get("beam_size", 5),
+            patience=job_input.get("patience", 1.0),
+            length_penalty=job_input.get("length_penalty", 1.0),
+            suppress_tokens=job_input.get("suppress_tokens", "-1"),
+            initial_prompt=job_input.get("initial_prompt"),
+            condition_on_previous_text=job_input.get("condition_on_previous_text", True),
+            temperature_increment_on_fallback=job_input.get("temperature_increment_on_fallback", 0.2),
+            compression_ratio_threshold=job_input.get("compression_ratio_threshold", 2.4),
+            logprob_threshold=job_input.get("logprob_threshold", -1.0),
+            no_speech_threshold=job_input.get("no_speech_threshold", 0.6),
+            enable_vad=job_input.get("enable_vad", False),
+            word_timestamps=job_input.get("word_timestamps", False),
+            clap_queries=job_input.get("clap_queries"),
+            force_align=job_input.get("force_align", False),
+            diarize=job_input.get("diarize", False),
+            diarize_min_speakers=job_input.get("diarize_min_speakers") or None,
+            diarize_max_speakers=job_input.get("diarize_max_speakers") or None,
+        )
+    finally:
+        try:
+            os.unlink(audio_path)
+        except OSError:
+            pass
 
     clean = to_jsonable(result)
     out_path = "/output/result.json"
