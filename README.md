@@ -599,6 +599,27 @@ replacement or a successful application-level canary. The helper never targets
 a production endpoint and never prints environment values or API response
 bodies.
 
+If a completed template update later serves a worker from the retained old
+digest, do not gamble with application retries. Re-trigger the rolling release
+for the exact already-current immutable image. The dedicated flag refuses a
+different target image and keeps every ordinary topology, optimistic-lock, and
+endpoint-confirmation wall:
+
+```bash
+python scripts/deploy_holy_grale_test.py \
+  --image ghcr.io/vinlow/worker-audio-specialist@sha256:<current>
+python scripts/deploy_holy_grale_test.py \
+  --image ghcr.io/vinlow/worker-audio-specialist@sha256:<current> \
+  --apply \
+  --force-rolling-release \
+  --expected-current-image ghcr.io/vinlow/worker-audio-specialist@sha256:<current> \
+  --confirm-endpoint dx99xymo20v3o9
+```
+
+`rolling-release-triggered` proves only that the guarded PATCH completed. Wait
+for new-image worker evidence and run the feature-specific canary before using
+the endpoint for a larger experiment.
+
 ## Based on
 
 Fork of [runpod-workers/worker-faster_whisper](https://github.com/runpod-workers/worker-faster_whisper) with per-word probability from [Vinlow/worker-faster_whisper-probability](https://github.com/Vinlow/worker-faster_whisper-probability).

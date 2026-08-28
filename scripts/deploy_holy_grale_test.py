@@ -310,6 +310,7 @@ class HolyGraleTestDeployer:
         *,
         apply: bool = False,
         expected_current_image: str | None = None,
+        force_rolling_release: bool = False,
     ) -> dict[str, Any]:
         image = self.validate_image(image)
         if expected_current_image is not None:
@@ -324,17 +325,23 @@ class HolyGraleTestDeployer:
             and template_before.get("containerRegistryAuthId")
             == REGISTRY_AUTH_ID
         )
-        if (
-            apply
-            and not already_current
-            and template_before["imageName"] != expected_current_image
-        ):
+        if force_rolling_release and not already_current:
+            raise DeploymentError(
+                "forced rolling release requires the exact image and registry "
+                "to be current already"
+            )
+        if apply and template_before["imageName"] != expected_current_image:
             raise DeploymentError(
                 "current image changed since dry-run; refusing stale deployment"
             )
+        planned_status = (
+            "rolling-release-planned"
+            if force_rolling_release
+            else "already-current" if already_current else "planned"
+        )
         summary = {
             "mode": "apply" if apply else "dry-run",
-            "status": "already-current" if already_current else "planned",
+            "status": planned_status,
             "endpoint_id": ENDPOINT_ID,
             "endpoint_name": ENDPOINT_NAME,
             "template_id": TEMPLATE_ID,
@@ -346,7 +353,7 @@ class HolyGraleTestDeployer:
             "configuration_preserved": True,
             "environment_variable_count": len(template_before["env"]),
         }
-        if not apply or already_current:
+        if not apply or (already_current and not force_rolling_release):
             return summary
 
         # REST v1 PATCH is intentionally partial. Omitting env and every other
@@ -374,7 +381,11 @@ class HolyGraleTestDeployer:
             "template",
         )
         self._assert_configuration_preserved(template_before, template_after)
-        summary["status"] = "updated"
+        summary["status"] = (
+            "rolling-release-triggered"
+            if force_rolling_release
+            else "updated"
+        )
         summary["current_image"] = image
         summary["environment_variable_count"] = len(template_after["env"])
         return summary
@@ -410,6 +421,14 @@ def _argument_parser() -> argparse.ArgumentParser:
             f"required on apply and must equal the locked endpoint ID {ENDPOINT_ID}"
         ),
     )
+    parser.add_argument(
+        "--force-rolling-release",
+        action="store_true",
+        help=(
+            "re-PATCH the exact already-current immutable image to trigger a "
+            "new rolling release; apply still requires every ordinary lock"
+        ),
+    )
     return parser
 
 
@@ -426,6 +445,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.image,
             apply=args.apply,
             expected_current_image=args.expected_current_image,
+            force_rolling_release=args.force_rolling_release,
         )
     except DeploymentError as error:
         print(f"deployment refused: {error}", file=sys.stderr)

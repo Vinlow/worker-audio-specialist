@@ -239,6 +239,64 @@ class HolyGraleTestDeployerTest(unittest.TestCase):
             any(method == "PATCH" for method, _, _ in self.api.calls)
         )
 
+    def test_forced_rolling_release_repatches_only_the_current_locked_image(self):
+        self.api.template["imageName"] = VALID_IMAGE
+        self.api.template["containerRegistryAuthId"] = deploy.REGISTRY_AUTH_ID
+        before = copy.deepcopy(self.api.template)
+
+        planned = self.deployer.deploy(
+            VALID_IMAGE,
+            force_rolling_release=True,
+        )
+        self.assertEqual(planned["status"], "rolling-release-planned")
+        self.assertFalse(
+            any(method == "PATCH" for method, _, _ in self.api.calls)
+        )
+
+        self.api.calls.clear()
+        applied = self.deployer.deploy(
+            VALID_IMAGE,
+            apply=True,
+            expected_current_image=VALID_IMAGE,
+            force_rolling_release=True,
+        )
+
+        self.assertEqual(applied["status"], "rolling-release-triggered")
+        self.assertEqual(
+            [call for call in self.api.calls if call[0] == "PATCH"],
+            [
+                (
+                    "PATCH",
+                    deploy.TEMPLATE_PATCH_PATH,
+                    {
+                        "imageName": VALID_IMAGE,
+                        "containerRegistryAuthId": deploy.REGISTRY_AUTH_ID,
+                    },
+                )
+            ],
+        )
+        self.assertEqual(
+            deploy.HolyGraleTestDeployer._configuration_snapshot(
+                self.api.template
+            ),
+            deploy.HolyGraleTestDeployer._configuration_snapshot(before),
+        )
+
+    def test_forced_rolling_release_refuses_a_different_target_image(self):
+        with self.assertRaisesRegex(
+            deploy.DeploymentError,
+            "requires the exact image",
+        ):
+            self.deployer.deploy(
+                VALID_IMAGE,
+                apply=True,
+                expected_current_image=OLD_IMAGE,
+                force_rolling_release=True,
+            )
+        self.assertFalse(
+            any(method == "PATCH" for method, _, _ in self.api.calls)
+        )
+
     def test_apply_requires_fresh_expected_current_image(self):
         with self.assertRaisesRegex(
             deploy.DeploymentError,
