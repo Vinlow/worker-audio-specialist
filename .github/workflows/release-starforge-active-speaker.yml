@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: starforge-active-speaker-image-release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   preflight:
@@ -53,7 +53,7 @@ jobs:
     environment: Production
     timeout-minutes: 180
     permissions:
-      contents: read
+      contents: write
       packages: write
     env:
       IMAGE_TAG: ghcr.io/vinlow/worker-audio-specialist:starforge-active-speaker-${{ inputs.commit_sha || github.sha }}
@@ -131,6 +131,9 @@ jobs:
           [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           immutable_image="ghcr.io/vinlow/worker-audio-specialist@$image_digest"
           echo "immutable_image=$immutable_image" >> "$GITHUB_OUTPUT"
+          receipt_tag="starforge-active-speaker-image-${image_digest#sha256:}"
+          git tag -a "$receipt_tag" "$RELEASE_SHA" -m "$immutable_image"
+          git push origin "refs/tags/$receipt_tag"
           RELEASE_IMAGE="$immutable_image" python -c 'import json, os; print(json.dumps({"kind":"w2l-starforge-active-speaker-image-release-v1","workerCommitSha":os.environ["RELEASE_SHA"],"starforgeSourceSha":"d152069a098f9539615c2b8a20421523cfb808b2","immutableImage":os.environ["RELEASE_IMAGE"]}, sort_keys=True))' > release-receipt.json
           {
             echo "## Starforge active-speaker image published"
@@ -138,6 +141,7 @@ jobs:
             echo "- Worker commit: \`$RELEASE_SHA\`"
             echo "- Starforge source: \`d152069a098f9539615c2b8a20421523cfb808b2\`"
             echo "- Immutable image: \`$immutable_image\`"
+            echo "- Digest receipt tag: \`$receipt_tag\`"
             echo "- Deployment: not performed"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve the immutable release receipt
