@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1.7
+
+FROM ghcr.io/vinlow/worker-audio-specialist@sha256:973f44ba32c211a01f527a008fe8ec31bfc91a8c706d0e49e2ee2eb3f4b83690 AS active-speaker-base
+
+ARG AUDIO_WORKER_BASE_IMAGE_ID=sha256:973f44ba32c211a01f527a008fe8ec31bfc91a8c706d0e49e2ee2eb3f4b83690
+ARG AUDIO_WORKER_RELEASE_SHA=unknown
+ARG LRASD_REVISION=1b6dcd2d8fc2895683de6508ec6294ec47d388ca
+ARG WEB2LABS_SOURCE_SHA=d152069a098f9539615c2b8a20421523cfb808b2
+
+RUN test "${AUDIO_WORKER_BASE_IMAGE_ID}" = \
+      "sha256:973f44ba32c211a01f527a008fe8ec31bfc91a8c706d0e49e2ee2eb3f4b83690" \
+    && test "${LRASD_REVISION}" = \
+      "1b6dcd2d8fc2895683de6508ec6294ec47d388ca" \
+    && test "${WEB2LABS_SOURCE_SHA}" = \
+      "d152069a098f9539615c2b8a20421523cfb808b2"
+
+LABEL org.opencontainers.image.revision="${AUDIO_WORKER_RELEASE_SHA}" \
+      org.web2labs.starforge.active-speaker.contract="runpod-v1-over-v2-authenticated-lineage" \
+      org.web2labs.starforge.source-revision="${WEB2LABS_SOURCE_SHA}"
+
+USER root
+WORKDIR /opt/starforge-active-speaker
+
+COPY --chown=0:0 --chmod=0444 requirements.lock.txt ./requirements.lock.txt
+RUN python -m pip install --no-cache-dir --no-deps -r requirements.lock.txt
+
+# LR-ASD source and both checkpoints are tracked by the exact public upstream
+# revision. Keep its Git database because the v2 runtime reasserts HEAD and the
+# executed four-file source closure on every request.
+RUN git clone --filter=blob:none https://github.com/Junhua-Liao/LR-ASD.git ./lrasd \
+    && git -C ./lrasd checkout --detach "${LRASD_REVISION}" \
+    && test "$(git -C ./lrasd rev-parse HEAD)" = "${LRASD_REVISION}" \
+    && printf '%s  %s\n' \
+      '155200fa5b19dc2405ff5f46c2028db6d3f111e8a3b04d5161af961ec80599aa' './lrasd/loss.py' \
+      '76d6e0c24a30c216482acc66bc2447b9f3cc86649a842b0c2ae36a646912e0b9' './lrasd/model/Classifier.py' \
+      '4d3b03584c6329b5710488cd35192e41ea42e48eb3d5a91afe81a1bedecfe493' './lrasd/model/Encoder.py' \
+      '7c2225fd03b4de081d2b01463d626371b4c344d72d990daaa47f9e5a2abe6682' './lrasd/model/Model.py' \
+      '85e6c77fc981595234790d1e128ebb60352d37726b2445e0ef8891e2512fe9e3' './lrasd/weight/pretrain_AVA.model' \
+      '6b4ef53694e874e96cf630198dc479c78aebb3993bbf166aee3d926dfe7d9342' './lrasd/weight/finetuning_TalkSet.model' \
+      | sha256sum --check --strict \
+    && test ! -e ./lrasd/model/__init__.py \
+    && git -C ./lrasd diff --quiet "${LRASD_REVISION}" -- \
+      loss.py model/Classifier.py model/Encoder.py model/Model.py
+
+COPY --chown=0:0 --chmod=0444 active_speaker_contracts.py ./active_speaker_contracts.py
+COPY --chown=0:0 --chmod=0444 active_speaker_media.py ./active_speaker_media.py
+COPY --chown=0:0 --chmod=0444 active_speaker_media_v2.py ./active_speaker_media_v2.py
+COPY --chown=0:0 --chmod=0444 active_speaker_model.py ./active_speaker_model.py
+COPY --chown=0:0 --chmod=0444 active_speaker_model_v2.py ./active_speaker_model_v2.py
+COPY --chown=0:0 --chmod=0444 active_speaker_runtime_v2.py ./active_speaker_runtime_v2.py
+COPY --chown=0:0 --chmod=0444 active_speaker_supplied_tracks.py ./active_speaker_supplied_tracks.py
+COPY --chown=0:0 --chmod=0444 active_speaker_runpod_handler.py ./active_speaker_runpod_handler.py
+COPY --chown=0:0 --chmod=0444 LR-ASD-LICENSE.txt ./LR-ASD-LICENSE.txt
+COPY --chown=0:0 --chmod=0444 Dockerfile.v2 ./Dockerfile.v2
+COPY --chown=0:0 --chmod=0444 Dockerfile.runpod ./Dockerfile.runpod
+
+RUN (getent group 65532 >/dev/null || groupadd --gid 65532 starforge-asd) \
+    && (getent passwd 65532 >/dev/null || useradd --uid 65532 --gid 65532 \
+      --no-create-home --shell /usr/sbin/nologin starforge-asd) \
+    && chmod 0555 /opt/starforge-active-speaker \
+    && test "$(stat -c '%u:%g:%a' active_speaker_runpod_handler.py)" = "0:0:444"
+
+ENV CUBLAS_WORKSPACE_CONFIG=:4096:8 \
+    HF_HUB_OFFLINE=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    STARFORGE_ACTIVE_SPEAKER_BASE_IMAGE_ID=${AUDIO_WORKER_BASE_IMAGE_ID} \
+    STARFORGE_ACTIVE_SPEAKER_RELEASE_SHA=${AUDIO_WORKER_RELEASE_SHA} \
+    STARFORGE_ACTIVE_SPEAKER_SOURCE_SHA=${WEB2LABS_SOURCE_SHA} \
+    TRANSFORMERS_OFFLINE=1
+
+USER 65532:65532
+
+FROM active-speaker-base AS test
+USER root
+COPY --chown=0:0 tests/ ./tests/
+RUN cd ./tests \
+    && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.. python -m unittest -v \
+      test_active_speaker_contracts \
+      test_active_speaker_media_clocks \
+      test_active_speaker_model_contract \
+      test_active_speaker_model_v2 \
+      test_active_speaker_reference_parity \
+      test_active_speaker_runpod_handler \
+      test_active_speaker_runtime_v2 \
+      test_active_speaker_supplied_tracks_v2
+
+FROM active-speaker-base AS runtime
+CMD ["python", "-u", "/opt/starforge-active-speaker/active_speaker_runpod_handler.py"]

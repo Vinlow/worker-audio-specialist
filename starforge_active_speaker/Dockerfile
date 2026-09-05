@@ -1,0 +1,33 @@
+FROM audio-worker:holy-grale-695b212@sha256:973f44ba32c211a01f527a008fe8ec31bfc91a8c706d0e49e2ee2eb3f4b83690
+
+ARG AUDIO_WORKER_BASE_IMAGE_ID
+RUN test "${AUDIO_WORKER_BASE_IMAGE_ID}" = \
+    "sha256:973f44ba32c211a01f527a008fe8ec31bfc91a8c706d0e49e2ee2eb3f4b83690"
+
+USER root
+WORKDIR /opt/starforge-active-speaker
+
+COPY --chown=0:0 --chmod=0444 requirements.lock.txt ./requirements.lock.txt
+RUN python -m pip install --no-cache-dir --no-deps -r requirements.lock.txt
+
+COPY --chown=0:0 --chmod=0444 active_speaker_contracts.py ./active_speaker_contracts.py
+COPY --chown=0:0 --chmod=0444 active_speaker_media.py ./active_speaker_media.py
+COPY --chown=0:0 --chmod=0444 active_speaker_model.py ./active_speaker_model.py
+COPY --chown=0:0 --chmod=0444 active_speaker_runtime.py ./active_speaker_runtime.py
+COPY --chown=0:0 --chmod=0444 LR-ASD-LICENSE.txt ./LR-ASD-LICENSE.txt
+COPY --chown=0:0 --chmod=0444 Dockerfile ./Dockerfile
+
+RUN groupadd --gid 65532 starforge-asd \
+    && useradd --uid 65532 --gid 65532 --no-create-home \
+        --shell /usr/sbin/nologin starforge-asd \
+    && chmod 0555 /opt/starforge-active-speaker \
+    && test "$(stat -c '%u:%g:%a' active_speaker_runtime.py)" = "0:0:444"
+
+ENV CUBLAS_WORKSPACE_CONFIG=:4096:8 \
+    HF_HUB_OFFLINE=1 \
+    STARFORGE_ACTIVE_SPEAKER_BASE_IMAGE_ID=${AUDIO_WORKER_BASE_IMAGE_ID} \
+    TRANSFORMERS_OFFLINE=1
+
+USER 65532:65532
+
+ENTRYPOINT ["python", "/opt/starforge-active-speaker/active_speaker_runtime.py"]
