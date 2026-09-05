@@ -11,6 +11,21 @@ source-hour denominator. Model/runtime sources are inherited from the pinned
 Starforge closure; the new measurement entry point is bound by this worker's
 release commit and immutable image. No production endpoint is changed.
 
+The optional `active_speaker_source_fast_worker.py` entry point measures complete
+raw sources using single-pass NVDEC normalization and four spawned CPU chunk
+preparers. It keeps the frozen model, CPU scaler, detector, tracker, crop policy
+and both scoring views unchanged. Every original decoded integer PTS is captured
+before resampling and supplied to the existing clock validators. The image adds
+the NVIDIA `video` driver capability; unsupported 8-bit 4:2:0 hardware decode
+fails explicitly instead of silently changing backend. CPU and synthetic pixel
+parity tests do not establish GPU equivalence or normal-upload economics.
+
+The batch-v1 request and 40-minute benchmark watchdog are unchanged. Ordered
+chunk hashes survive in failure receipts, but are not production resume or crop
+authority. Stage CPU sums overlap; use elapsed worker lifecycle for cost, and
+never divide a partial batch over unprocessed source hours. The old source-worker
+entry point remains available as the two-pass sequential comparison.
+
 This directory is an isolated LR-ASD feasibility runtime for Starforge Visual
 Director. It is not imported by Studio, Audio-Worker, Render2, or the existing
 Visual Director planner. Its successful result is a timestamped face-track

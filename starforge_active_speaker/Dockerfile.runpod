@@ -51,6 +51,8 @@ COPY --chown=0:0 --chmod=0444 active_speaker_runtime_v2.py ./active_speaker_runt
 COPY --chown=0:0 --chmod=0444 active_speaker_supplied_tracks.py ./active_speaker_supplied_tracks.py
 COPY --chown=0:0 --chmod=0444 active_speaker_runpod_handler.py ./active_speaker_runpod_handler.py
 COPY --chown=0:0 --chmod=0444 active_speaker_source_worker.py ./active_speaker_source_worker.py
+COPY --chown=0:0 --chmod=0444 active_speaker_source_media.py ./active_speaker_source_media.py
+COPY --chown=0:0 --chmod=0444 active_speaker_source_fast_worker.py ./active_speaker_source_fast_worker.py
 ADD --chmod=0444 --checksum=sha256:8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4 \
     https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
     ./yunet.onnx
@@ -65,6 +67,7 @@ RUN (getent group 65532 >/dev/null || groupadd --gid 65532 starforge-asd) \
     && test "$(stat -c '%u:%g:%a' active_speaker_runpod_handler.py)" = "0:0:444"
 
 ENV AUDIO_WORKER_PRELOAD= \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
     CUBLAS_WORKSPACE_CONFIG=:4096:8 \
     HF_HUB_OFFLINE=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -87,6 +90,7 @@ RUN cd ./tests \
       test_active_speaker_reference_parity \
       test_active_speaker_runpod_handler \
       test_active_speaker_source_worker \
+      test_active_speaker_source_media \
       test_active_speaker_runtime_v2 \
       test_active_speaker_supplied_tracks_v2
 
