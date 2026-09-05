@@ -91,4 +91,13 @@ RUN cd ./tests \
       test_active_speaker_supplied_tracks_v2
 
 FROM active-speaker-base AS runtime
+USER root
+RUN install -d -m 0700 -o 65532 -g 65532 /run/starforge-active-speaker
+ENV PYTHONPATH=/opt/starforge-active-speaker
+WORKDIR /run/starforge-active-speaker
+USER 65532:65532
+# The SDK heartbeat runs in another process and reads this persisted job set.
+# A read-only code-directory cwd silently loses active jobs and can trigger
+# premature idle/retry/scaling. Prove visibility as the actual runtime user.
+RUN python -c 'import subprocess,sys; from runpod.serverless.modules.worker_state import JobsProgress; state=JobsProgress(); state.add("image-state-gate"); subprocess.run([sys.executable,"-c","from runpod.serverless.modules.worker_state import JobsProgress; assert JobsProgress().get_job_list() == \"image-state-gate\""],check=True); state.clear()'
 CMD ["python", "-u", "/opt/starforge-active-speaker/active_speaker_runpod_handler.py"]
