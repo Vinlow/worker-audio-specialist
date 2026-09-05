@@ -536,6 +536,7 @@ class ActiveSpeakerRunpodWorker:
                 "bytes": result["_resultBytes"],
                 "sha256": result["_resultSha256"],
                 "identities": result_without_private["identities"],
+                "scoreLedger": result_without_private["scoreLedger"],
                 "scoreLedgerSha256": _sha256_bytes(
                     _canonical_json(result_without_private["scoreLedger"])
                 ),

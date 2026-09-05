@@ -337,6 +337,9 @@ Downloads happen once, in parallel, with exact byte/hash checks. The handler
 then launches the v2 runtime as a fresh CUDA-only process group and kills the
 whole group on deadline. Its compact response separates raw-source duration,
 25 fps face-track seconds, two-view workload, download time, runtime stage
-time, handler time, and immutable worker/runtime identities. Those fields are
-measurement evidence only; serverless cost must still come from the RunPod job
-and billing receipts, never from handler wall time alone.
+time, handler time, and immutable worker/runtime identities. The authenticated
+score ledger is always returned, including canonical, horizontal-mirror, and
+exact-mean logits for the requested AVA or TalkSet checkpoint; `FULL_RESULT`
+adds the rest of the v2 receipt. Those fields are measurement evidence only;
+serverless cost must still come from the RunPod job and billing receipts, never
+from handler wall time alone.

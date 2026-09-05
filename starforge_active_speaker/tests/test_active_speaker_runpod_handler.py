@@ -233,6 +233,7 @@ class ActiveSpeakerRunpodHandlerTests(unittest.TestCase):
         self.assertEqual(response["workload"]["rawSourceSeconds"], 13.0)
         self.assertEqual(response["workload"]["scoredTrackSecondsAt25Fps"], 21.08)
         self.assertEqual(response["workload"]["viewCount"], 2)
+        self.assertEqual(response["result"]["scoreLedger"], result["scoreLedger"])
         self.assertNotIn("runtimeResult", response)
 
     @staticmethod

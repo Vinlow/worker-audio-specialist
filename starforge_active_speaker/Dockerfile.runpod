@@ -60,7 +60,8 @@ RUN (getent group 65532 >/dev/null || groupadd --gid 65532 starforge-asd) \
     && chmod 0555 /opt/starforge-active-speaker \
     && test "$(stat -c '%u:%g:%a' active_speaker_runpod_handler.py)" = "0:0:444"
 
-ENV CUBLAS_WORKSPACE_CONFIG=:4096:8 \
+ENV AUDIO_WORKER_PRELOAD= \
+    CUBLAS_WORKSPACE_CONFIG=:4096:8 \
     HF_HUB_OFFLINE=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     STARFORGE_ACTIVE_SPEAKER_BASE_IMAGE_ID=${AUDIO_WORKER_BASE_IMAGE_ID} \
