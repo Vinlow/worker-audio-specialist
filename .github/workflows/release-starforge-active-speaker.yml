@@ -1,6 +1,9 @@
 name: Release | Build and publish Starforge active-speaker image
 
 on:
+  push:
+    tags:
+      - starforge-active-speaker-release-*
   workflow_dispatch:
     inputs:
       commit_sha:
@@ -23,10 +26,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          ref: ${{ inputs.commit_sha }}
+          ref: ${{ inputs.commit_sha || github.sha }}
       - name: Lock the release commit and builder fuse
         env:
-          EXPECTED_SHA: ${{ inputs.commit_sha }}
+          EXPECTED_SHA: ${{ inputs.commit_sha || github.sha }}
           BUILDER_READY: ${{ vars.AUDIO_WORKER_BUILDER_READY }}
         run: |
           set -euo pipefail
@@ -53,13 +56,13 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE_TAG: ghcr.io/vinlow/worker-audio-specialist:starforge-active-speaker-${{ inputs.commit_sha }}
-      RELEASE_SHA: ${{ inputs.commit_sha }}
-      TEST_TAG: starforge-active-speaker:test-${{ inputs.commit_sha }}
+      IMAGE_TAG: ghcr.io/vinlow/worker-audio-specialist:starforge-active-speaker-${{ inputs.commit_sha || github.sha }}
+      RELEASE_SHA: ${{ inputs.commit_sha || github.sha }}
+      TEST_TAG: starforge-active-speaker:test-${{ inputs.commit_sha || github.sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.commit_sha }}
+          ref: ${{ inputs.commit_sha || github.sha }}
       - name: Require the exact builder contract
         run: |
           set -euo pipefail
@@ -100,7 +103,7 @@ jobs:
           push: false
           tags: ${{ env.TEST_TAG }}
           build-args: |
-            AUDIO_WORKER_RELEASE_SHA=${{ inputs.commit_sha }}
+            AUDIO_WORKER_RELEASE_SHA=${{ inputs.commit_sha || github.sha }}
       - name: Build the exact deployable runtime image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -111,7 +114,7 @@ jobs:
           push: false
           tags: ${{ env.IMAGE_TAG }}
           build-args: |
-            AUDIO_WORKER_RELEASE_SHA=${{ inputs.commit_sha }}
+            AUDIO_WORKER_RELEASE_SHA=${{ inputs.commit_sha || github.sha }}
       - name: Authenticate the runtime image contract
         run: |
           set -euo pipefail
@@ -140,7 +143,7 @@ jobs:
       - name: Preserve the immutable release receipt
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: starforge-active-speaker-image-${{ inputs.commit_sha }}
+          name: starforge-active-speaker-image-${{ inputs.commit_sha || github.sha }}
           path: release-receipt.json
           if-no-files-found: error
           retention-days: 90
