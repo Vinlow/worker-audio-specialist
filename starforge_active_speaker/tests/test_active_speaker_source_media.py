@@ -59,7 +59,7 @@ class SingleDecodeTest(unittest.TestCase):
             media.decoder_options({"codec_name": "av1", "pix_fmt": "yuv420p10le"}, 0)
 
     def test_actual_clock_and_pixels_equal_two_pass_baseline(self):
-        for fps, offset, duration in [("50", "0", "2"), ("24000/1001", "0.5", "2.002"),
+        for fps, offset, duration in [("50", "0", "2"), ("30000/1001", "0", "2.002"), ("24000/1001", "0.5", "2.002"),
                 ("25", "0", "121.04")]:
             with self.subTest(fps=fps, offset=offset), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -93,6 +93,18 @@ class SingleDecodeTest(unittest.TestCase):
                 media.clock.frames[1]["best_effort_timestamp"] += 100
                 with self.assertRaises(ContractViolation):
                     media.validate_input_streams(source, video_stream_index=0, audio_stream_index=1)
+                reordered = root / "fps-first"
+                reordered.mkdir()
+                first = SingleDecodeMediaProcessor(ffmpeg="ffmpeg", ffprobe="ffprobe",
+                    maximum_frames=3000, select_before_download=True)
+                reordered_chunks = first.prepare(source, reordered, 0)
+                self.assertEqual(first.validate_input_streams(source, video_stream_index=0, audio_stream_index=1),
+                    expected_streams)
+                for expected, actual in zip(chunks, reordered_chunks, strict=True):
+                    command = ["ffmpeg", "-v", "error", "-i"]
+                    suffix = ["-map", "0:v:0", "-f", "framemd5", "-"]
+                    self.assertEqual(subprocess.check_output(command + [str(expected)] + suffix),
+                        subprocess.check_output(command + [str(actual)] + suffix))
 
 
 if __name__ == "__main__":

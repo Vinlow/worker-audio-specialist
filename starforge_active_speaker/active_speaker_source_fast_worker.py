@@ -121,11 +121,16 @@ class FastResidentSourceWorker(ResidentSourceWorker):
     def __init__(self):
         super().__init__()
         self.processor = FastSourceProcessor(self.model, self.processor.yunet_path)
+        preselect = os.environ.get("STARFORGE_SOURCE_PRESELECT_FRAMES", "0")
+        if preselect not in {"0", "1"}:
+            raise ContractViolation("frame preselection must be explicitly 0 or 1")
+        self.processor.media.select_before_download = preselect == "1"
 
     def handler(self, event):
         self.processor.progress = None
         response = super().handler(event)
-        response["executionProfile"] = "single-decode-nvdec-parallel-cpu-v1"
+        response["executionProfile"] = ("single-decode-nvdec-fps-first-parallel-cpu-v2"
+            if self.processor.media.select_before_download else "single-decode-nvdec-parallel-cpu-v1")
         response["executionSourceIdentities"] = {name: sha256_file(Path(__file__).with_name(name), name)[0]
             for name in ["active_speaker_source_fast_worker.py", "active_speaker_source_media.py"]}
         if response["status"] == "FAILED":

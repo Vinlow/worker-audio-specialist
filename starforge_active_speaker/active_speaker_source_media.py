@@ -51,11 +51,12 @@ class DecodedClock:
 
 
 class SingleDecodeMediaProcessor(MediaProcessor):
-    def __init__(self, *, decoder="cpu", **kwargs):
+    def __init__(self, *, decoder="cpu", select_before_download=False, **kwargs):
         super().__init__(**kwargs)
         if decoder not in {"cpu", "nvdec"}:
             raise ContractViolation("unknown raw video decoder")
         self.decoder = decoder
+        self.select_before_download = select_before_download
         self.prepared_source = None
         self.clock = None
         self.evidence = None
@@ -84,9 +85,8 @@ class SingleDecodeMediaProcessor(MediaProcessor):
         decode_options, download_filter = self.decoder_options(stream, stream_index)
         command = [self.ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "info", "-nostats",
             "-xerror", "-n", "-copyts", "-threads", "4", *decode_options, "-i", str(source),
-            "-map", f"0:{stream_index}", "-an", "-vf", download_filter +
-            "showinfo=checksum=0,setpts=PTS-STARTPTS,scale=w='min(640,iw)':h=-2,"
-            "fps=25:round=near,setpts=N/(25*TB)", "-filter_threads", "2", "-vsync", "cfr",
+            "-map", f"0:{stream_index}", "-an", "-vf", self.filters(download_filter),
+            "-filter_threads", "2", "-vsync", "cfr",
             "-c:v", "ffv1", "-level", "3", "-threads", "4", "-g", "1", "-f", "segment",
             "-segment_time", "120", "-reset_timestamps", "1", str(directory / "chunk-%04d.mkv")]
         self.decode(command, clock)
@@ -96,8 +96,18 @@ class SingleDecodeMediaProcessor(MediaProcessor):
         self.prepared_source, self.clock = source.resolve(), clock
         self.evidence = {"method": "single-decode-showinfo-integer-pts-v1", "decoder": self.decoder,
             "codec": stream["codec_name"], "rawFrames": len(clock.frames),
-            "rawClockIdentity": content_identity(clock.frames), "resize": "UNCHANGED_CPU_SCALE"}
+            "rawClockIdentity": content_identity(clock.frames), "resize": "UNCHANGED_CPU_SCALE",
+            "selectCanonicalFramesBeforeDownload": self.select_before_download}
         return chunks
+
+    def filters(self, download_filter):
+        clock = "showinfo=checksum=0,setpts=PTS-STARTPTS,"
+        scale = "scale=w='min(640,iw)':h=-2,"
+        fps = "fps=25:round=near,"
+        # The raw clock still sees ALL frames. Selection uses unchanged PTS and
+        # round=near; only unused pixel transfer/resize work moves after it.
+        return (clock + fps + download_filter + scale if self.select_before_download else
+            download_filter + clock + scale + fps) + "setpts=N/(25*TB)"
 
     def decoder_options(self, stream, stream_index):
         if self.decoder == "cpu":

@@ -26,6 +26,13 @@ authority. Stage CPU sums overlap; use elapsed worker lifecycle for cost, and
 never divide a partial batch over unprocessed source hours. The old source-worker
 entry point remains available as the two-pass sequential comparison.
 
+Set `STARFORGE_SOURCE_PRESELECT_FRAMES=1` on an isolated benchmark endpoint to
+select the explicit fps-first-v2 profile. The unchanged 25fps filter then runs
+before device download and scaling; every original decoded PTS is still captured
+and validated before selection. The default remains the measured v1 profile.
+CPU tests compare exact pixels/clocks against both orders; CUDA equivalence and
+economics require complete-source measurements, not inferred speedups.
+
 This directory is an isolated LR-ASD feasibility runtime for Starforge Visual
 Director. It is not imported by Studio, Audio-Worker, Render2, or the existing
 Visual Director planner. Its successful result is a timestamped face-track
