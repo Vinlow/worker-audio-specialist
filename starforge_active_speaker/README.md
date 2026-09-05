@@ -1,5 +1,16 @@
 # Active-speaker local lab runtime
 
+The additive `active_speaker_source_worker.py` entry point measures complete
+raw uploads with one resident AVA model, pinned YuNet tracking, the unchanged
+two-view scorer, and no review video. It is explicitly throughput-only, not a
+v2 observation or crop authority. The default supplied-track handler is unchanged.
+Select the source worker only through an owned temporary benchmark endpoint's
+command override. Its strict batch is limited to three distinct sources, two
+raw hours, and 2400 seconds of execution; partial coverage never receives a full
+source-hour denominator. Model/runtime sources are inherited from the pinned
+Starforge closure; the new measurement entry point is bound by this worker's
+release commit and immutable image. No production endpoint is changed.
+
 This directory is an isolated LR-ASD feasibility runtime for Starforge Visual
 Director. It is not imported by Studio, Audio-Worker, Render2, or the existing
 Visual Director planner. Its successful result is a timestamped face-track

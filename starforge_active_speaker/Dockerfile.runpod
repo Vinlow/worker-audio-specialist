@@ -50,6 +50,10 @@ COPY --chown=0:0 --chmod=0444 active_speaker_model_v2.py ./active_speaker_model_
 COPY --chown=0:0 --chmod=0444 active_speaker_runtime_v2.py ./active_speaker_runtime_v2.py
 COPY --chown=0:0 --chmod=0444 active_speaker_supplied_tracks.py ./active_speaker_supplied_tracks.py
 COPY --chown=0:0 --chmod=0444 active_speaker_runpod_handler.py ./active_speaker_runpod_handler.py
+COPY --chown=0:0 --chmod=0444 active_speaker_source_worker.py ./active_speaker_source_worker.py
+ADD --chmod=0444 --checksum=sha256:8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4 \
+    https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
+    ./yunet.onnx
 COPY --chown=0:0 --chmod=0444 LR-ASD-LICENSE.txt ./LR-ASD-LICENSE.txt
 COPY --chown=0:0 --chmod=0444 Dockerfile.v2 ./Dockerfile.v2
 COPY --chown=0:0 --chmod=0444 Dockerfile.runpod ./Dockerfile.runpod
@@ -82,6 +86,7 @@ RUN cd ./tests \
       test_active_speaker_model_v2 \
       test_active_speaker_reference_parity \
       test_active_speaker_runpod_handler \
+      test_active_speaker_source_worker \
       test_active_speaker_runtime_v2 \
       test_active_speaker_supplied_tracks_v2
 
