@@ -1,0 +1,166 @@
+{
+  "schemaVersion": "alignment-window-regression-v1",
+  "audioSha256": "bb090d8af67d87a68baa291f99a32c0f782c11ee943c52ea565bd6504e1d840c",
+  "cases": [
+    {
+      "candidates": [
+        [
+          {
+            "word": {
+              "word": "motivated,",
+              "start": 389.55985328442813,
+              "end": 389.75991997332443,
+              "probability": 0.818359375,
+              "speakerId": "SPEAKER_00",
+              "speakerScopeId": "sha256:dbdb06dc0868995495e0e3e446efa48812c499cb2df47cded9e5e901138050d9",
+              "speakerConfidence": 1,
+              "speakerOverlap": false,
+              "onset_start": 389.55985328442813,
+              "offset_end": 390.0,
+              "alignment_status": "ALIGNED_SUPPORTED",
+              "alignment_authority": true,
+              "alignment_model_id": "torchaudio/WAV2VEC2_ASR_LARGE_LV60K_960H",
+              "alignment_language": "en"
+            },
+            "window_index": 6,
+            "window_start": 330.0,
+            "window_end": 390.0
+          },
+          {
+            "word": {
+              "word": "motivated,",
+              "start": 388.92130710236745,
+              "end": 389.54151383794596,
+              "probability": 0.818359375,
+              "speakerId": "SPEAKER_00",
+              "speakerScopeId": "sha256:dbdb06dc0868995495e0e3e446efa48812c499cb2df47cded9e5e901138050d9",
+              "speakerConfidence": 1,
+              "speakerOverlap": false,
+              "onset_start": 388.92130710236745,
+              "offset_end": 390.8019339779927,
+              "alignment_status": "ALIGNED_SUPPORTED",
+              "alignment_authority": true,
+              "alignment_model_id": "torchaudio/WAV2VEC2_ASR_LARGE_LV60K_960H",
+              "alignment_language": "en"
+            },
+            "window_index": 7,
+            "window_start": 385.0,
+            "window_end": 445.0
+          }
+        ],
+        [
+          {
+            "word": {
+              "word": "having",
+              "start": 390.8019339779927,
+              "end": 391.0420140046682,
+              "probability": 0.99951171875,
+              "speakerId": "SPEAKER_00",
+              "speakerScopeId": "sha256:dbdb06dc0868995495e0e3e446efa48812c499cb2df47cded9e5e901138050d9",
+              "speakerConfidence": 0.2254,
+              "speakerOverlap": false,
+              "onset_start": 389.54151383794596,
+              "offset_end": 391.12204068022675,
+              "alignment_status": "ALIGNED_SUPPORTED",
+              "alignment_authority": true,
+              "alignment_model_id": "torchaudio/WAV2VEC2_ASR_LARGE_LV60K_960H",
+              "alignment_language": "en"
+            },
+            "window_index": 7,
+            "window_start": 385.0,
+            "window_end": 445.0
+          }
+        ]
+      ],
+      "name": "backward-onset",
+      "rawOrdinals": [
+        877,
+        878
+      ],
+      "expectedChoice": [
+        1,
+        0
+      ]
+    },
+    {
+      "candidates": [
+        [
+          {
+            "word": {
+              "word": "I've",
+              "start": 444.4398132710904,
+              "end": 444.9399799933311,
+              "probability": 0.830810546875,
+              "speakerId": "SPEAKER_00",
+              "speakerScopeId": "sha256:dbdb06dc0868995495e0e3e446efa48812c499cb2df47cded9e5e901138050d9",
+              "speakerConfidence": 1,
+              "speakerOverlap": false,
+              "onset_start": 443.89963321107035,
+              "offset_end": 445.0,
+              "alignment_status": "ALIGNED_SUPPORTED",
+              "alignment_authority": true,
+              "alignment_model_id": "torchaudio/WAV2VEC2_ASR_LARGE_LV60K_960H",
+              "alignment_language": "en"
+            },
+            "window_index": 7,
+            "window_start": 385.0,
+            "window_end": 445.0
+          },
+          {
+            "word": {
+              "word": "I've",
+              "start": 444.4014671557186,
+              "end": 444.52150716905635,
+              "probability": 0.830810546875,
+              "speakerId": "SPEAKER_00",
+              "speakerScopeId": "sha256:dbdb06dc0868995495e0e3e446efa48812c499cb2df47cded9e5e901138050d9",
+              "speakerConfidence": 1,
+              "speakerOverlap": false,
+              "onset_start": 443.8812937645882,
+              "offset_end": 444.5615205068356,
+              "alignment_status": "ALIGNED_SUPPORTED",
+              "alignment_authority": true,
+              "alignment_model_id": "torchaudio/WAV2VEC2_ASR_LARGE_LV60K_960H",
+              "alignment_language": "en"
+            },
+            "window_index": 8,
+            "window_start": 440.0,
+            "window_end": 500.0
+          }
+        ],
+        [
+          {
+            "word": {
+              "word": "actually",
+              "start": 444.5615205068356,
+              "end": 444.8416138712904,
+              "probability": 0.9990234375,
+              "speakerId": "SPEAKER_00",
+              "speakerScopeId": "sha256:dbdb06dc0868995495e0e3e446efa48812c499cb2df47cded9e5e901138050d9",
+              "speakerConfidence": 1,
+              "speakerOverlap": false,
+              "onset_start": 444.52150716905635,
+              "offset_end": 444.9616538846282,
+              "alignment_status": "ALIGNED_SUPPORTED",
+              "alignment_authority": true,
+              "alignment_model_id": "torchaudio/WAV2VEC2_ASR_LARGE_LV60K_960H",
+              "alignment_language": "en"
+            },
+            "window_index": 8,
+            "window_start": 440.0,
+            "window_end": 500.0
+          }
+        ]
+      ],
+      "name": "overlapping-lexical-and-acoustic-end",
+      "rawOrdinals": [
+        1043,
+        1044
+      ],
+      "expectedChoice": [
+        1,
+        0
+      ]
+    }
+  ]
+}
