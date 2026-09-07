@@ -17,7 +17,7 @@ Process:
      b. Tokenize each Whisper word's text to char-level indices
      c. torchaudio.functional.forced_align finds optimal frame→token mapping
      d. Convert frame indices → seconds (relative to chunk start)
-  4. Stitch chunks, dropping overlap regions
+  4. Select a coherent word path across measured overlap candidates
   5. Words with un-tokenizable chars (numbers, special) keep original timing
 
 Notes:
@@ -40,6 +40,7 @@ import numpy as np
 import torch
 import torchaudio
 from model_load_lock import serialized_model_load
+from alignment_window_stitcher import AlignmentWindowCandidate, AlignmentWindowStitcher
 from torchaudio.pipelines import WAV2VEC2_ASR_LARGE_LV60K_960H as BUNDLE
 
 
@@ -215,24 +216,20 @@ class Wav2Vec2Aligner:
         words: list of {"word": str, "start": float, "end": float, ...}
                from faster-whisper transcribe(word_timestamps=True).
         Returns: same list with start/end re-timed via forced alignment.
-                 Words that couldn't be aligned (no valid chars, fell off chunk
-                 boundaries) keep their original timing — preserving order +
-                 count exactly.
+                 Non-vocabulary words keep explicitly non-authoritative original
+                 timing. If measured windows cannot form a complete ordered
+                 sequence, alignment fails and the caller retains native ASR.
 
         chunk_sec: how much audio to process at once (frames in memory).
         overlap_sec: chunk overlap so words near chunk seams have full context.
 
         Word→chunk assignment: every word STARTING in a chunk's window is part
         of that chunk's CTC target sequence (so all speech in the chunk's audio
-        has tokens to map onto), but a word's timing is WRITTEN by exactly one
-        chunk — the first chunk that fully contains it with EDGE_MARGIN_SEC to
-        spare (the last chunk, having no successor, writes everything it
-        contains). Words already written act as anchors only; re-aligning them
-        at the LEFT EDGE of the next chunk (where preceding audio is truncated)
-        measurably degrades their timing, and that degraded version used to
-        overwrite the good mid-chunk one. Words too close to a chunk's RIGHT
-        edge anchor there and are written by the next chunk, which contains
-        them mid-chunk thanks to the overlap.
+        has tokens to map onto). Windows with complete word context contribute
+        measured candidates. The stitcher chooses the most context-rich complete
+        path whose lexical and acoustic envelopes remain ordered, including at
+        window switches. Edge-only words anchor the CTC path but cannot replace
+        a measurement with complete context from a neighboring window.
         """
         normalized_language = self.normalize_language_code(language_code)
         if normalized_language not in ALIGNMENT_SUPPORTED_LANGUAGES:
@@ -256,8 +253,9 @@ class Wav2Vec2Aligner:
         total_samples = waveform.shape[1]
         total_dur = total_samples / self.sample_rate
 
-        # Output buffer — will overwrite for each word
+        # Explicit non-vocabulary fallbacks stay separate from measured geometry.
         aligned: List[Optional[dict]] = [None] * len(words)
+        candidates: List[List[AlignmentWindowCandidate]] = [[] for _ in words]
 
         chunk_step = chunk_sec - overlap_sec
         if chunk_step <= 0:
@@ -277,27 +275,25 @@ class Wav2Vec2Aligner:
             is_last_chunk = chunk_end_sec >= total_dur - 1e-6
 
             # Every word STARTING in this chunk's window goes into the CTC
-            # target sequence — INCLUDING words already written by the previous
+            # target sequence — INCLUDING words measured by the previous
             # chunk. The overlap audio contains their speech; without their
             # tokens as anchors, forced_align smears the first unwritten word's
             # start across that target-less speech (observed: a word at 59.3s
-            # dragged to the 55.0s chunk boundary). Anchors are aligned but
-            # their timings are discarded — only `writable` words get written.
+            # dragged to the 55.0s chunk boundary). Edge anchors are aligned but
+            # only fully contained words contribute candidates to the stitcher.
             words_in_chunk = [
                 (i, w) for i, w in enumerate(words)
-                if chunk_start_sec <= w["start"] < chunk_end_sec - EDGE_MARGIN_SEC
+                if chunk_start_sec <= w["start"] < chunk_end_sec
+                and (is_last_chunk or w["start"] < chunk_end_sec - EDGE_MARGIN_SEC)
             ]
 
-            # A word's timing is written by the FIRST chunk that fully contains
-            # it (end inside the margin too; the last chunk has no successor,
-            # so it writes everything it contains). Words at the right edge
-            # anchor here and are written by the next chunk, where the overlap
-            # places them mid-chunk with full acoustic context instead of
-            # force-squeezing their tokens into truncated audio.
+            # Both sides need context at interior window edges. A word can have
+            # candidates from multiple windows; ownership is selected only once
+            # all measured geometry is available. Source endpoints are exempt.
             writable = {
                 i for i, w in words_in_chunk
-                if aligned[i] is None
-                and (is_last_chunk or w["end"] <= chunk_end_sec - EDGE_MARGIN_SEC)
+                if (is_last_chunk or w["end"] <= chunk_end_sec - EDGE_MARGIN_SEC)
+                and (chunk_start_sec == 0 or w["start"] >= chunk_start_sec + EDGE_MARGIN_SEC)
             }
 
             if not writable:
@@ -359,9 +355,8 @@ class Wav2Vec2Aligner:
                 )
             except RuntimeError as e:
                 print(f"[Wav2Vec2Aligner] chunk {chunk_idx} forced_align failed: {e}", flush=True)
-                # Leave the words unmarked: those in the overlap region get a
-                # second chance in the next chunk; the rest fall back to their
-                # original timing in the final sweep below.
+                # A neighboring window may still supply complete candidates.
+                # Missing coverage fails the final stitch explicitly.
                 chunk_start_sec += chunk_step
                 chunk_idx += 1
                 continue
@@ -377,8 +372,8 @@ class Wav2Vec2Aligner:
             # some chars (rare), fall back to original timing for affected words.
             if len(token_spans) != len(tokens):
                 # Sanity check — log + skip chunk to avoid wrong alignments.
-                # Unmarked words are retried by the next chunk or swept to
-                # original timing at the end.
+                # A neighboring window may supply them; missing coverage fails
+                # explicitly rather than claiming an aligned result.
                 print(
                     f"[Wav2Vec2Aligner] chunk {chunk_idx}: token_spans={len(token_spans)} "
                     f"vs targets={len(tokens)} — sequences out of sync, falling back",
@@ -399,9 +394,8 @@ class Wav2Vec2Aligner:
                 spans_for_word = token_spans[cursor:cursor + n_chars]
                 cursor += n_chars
                 if words_idx not in writable:
-                    # Anchor word — its timing was already written by an earlier
-                    # chunk (or is deferred to the next); the spans only served
-                    # to absorb its speech in the CTC path.
+                    # Edge anchor: the spans absorb speech in this CTC path;
+                    # a complete-context window must supply its candidate.
                     continue
                 if not spans_for_word:
                     aligned[words_idx] = self._fallback_word(
@@ -459,20 +453,19 @@ class Wav2Vec2Aligner:
                 new_word["alignment_authority"] = True
                 new_word["alignment_model_id"] = ALIGNMENT_MODEL_ID
                 new_word["alignment_language"] = normalized_language
-                aligned[words_idx] = new_word
-                words_aligned += 1
+                candidates[words_idx].append(AlignmentWindowCandidate(
+                    new_word, chunk_idx, chunk_start_sec, chunk_end_sec,
+                ))
 
             chunks_processed += 1
             chunk_start_sec += chunk_step
             chunk_idx += 1
 
-        # Any words not aligned (off the end, between chunk overlaps) keep originals
-        for i, w in enumerate(words):
-            if aligned[i] is None:
-                aligned[i] = self._fallback_word(
-                    w,
-                    "NO_COMPLETE_ALIGNMENT",
-                )
+        # Choose complete, ordered geometry across all windows. If no coherent
+        # path exists, fail alignment explicitly; never demote an inconsistent
+        # measured word to a fallback just to manufacture a passing transcript.
+        result = AlignmentWindowStitcher.stitch(candidates, aligned)
+        words_aligned = sum(bool(word.get("alignment_authority")) for word in result)
 
         print(
             f"[Wav2Vec2Aligner] aligned {words_aligned}/{len(words)} words "
@@ -480,4 +473,4 @@ class Wav2Vec2Aligner:
             f"{chunks_processed} chunks of {chunk_sec}s)",
             flush=True,
         )
-        return aligned  # type: ignore
+        return result
