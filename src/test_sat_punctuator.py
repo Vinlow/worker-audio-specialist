@@ -110,8 +110,8 @@ class SaTPunctuatorContractTest(unittest.TestCase):
         )
         self.assertEqual(
             (
-                "sha256:04c110545a12504c89be2c7b611a6ab"
-                "772a966e8b8912d4bbd4fa0bccff239a3"
+                "sha256:643c91c22bceaefb892793ed652b57940"
+                "0b7db03c59a8d19af70a5828049e017"
             ),
             implementation["sourceContractId"],
         )

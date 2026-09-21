@@ -192,6 +192,16 @@ audio replay do not establish deployment or public Studio availability.
 
 ### SaT punctuation window and arrival-batch probes (experimental)
 
+The opt-in Parakeet acoustic-alignment router changes the exact SaT source
+contract to
+`sha256:643c91c22bceaefb892793ed652b579400b7db03c59a8d19af70a5828049e017`.
+SaT model, request and inference code are unchanged, but the contract includes
+the entire `predict.py` router. Clients pinned to the previous
+`sha256:04c110545a12504c89be2c7b611a6ab772a966e8b8912d4bbd4fa0bccff239a3`
+must coordinate their exact expected identity before this image is deployed to
+a shared endpoint. Never forge the old identity or remove the caller's check.
+Hosted source CI checks this fingerprint before the expensive image build.
+
 The SaT path is selected only by sending `sat_punctuation_probe` or
 `sat_punctuation_batch_probe`; normal Whisper and Parakeet jobs never load it.
 Every request must bind the exact
