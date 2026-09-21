@@ -86,7 +86,7 @@ never trigger a mutable Hugging Face download.
 | `sat_punctuation_probe` | dict | Explicit diagnostic-only SaT window request. Mutually exclusive with audio, `span_stream`, and `clap_queries`; see the exact contract below. |
 | `sat_punctuation_batch_probe` | dict | Explicit diagnostic-only SaT arrival batch with one to eight source windows. Mutually exclusive with the single-window probe, audio, `span_stream`, and `clap_queries`. |
 | `model` | str | Whisper model. Default: `"base"` |
-| `asr_backend` | str | `"whisper"` (default) or the explicit experimental `"parakeet"` path. Parakeet currently supports classic/final jobs only and rejects CLAP, forced alignment, diarization, translation, and VAD instead of silently ignoring them. |
+| `asr_backend` | str | `"whisper"` (default) or the explicit experimental `"parakeet"` path. Parakeet supports classic/final jobs only and rejects CLAP, diarization, translation, and VAD. Optional acoustic alignment requires both `language:"en"` and `word_timestamps:true`. |
 | `transcription` | str | Output format: `"plain_text"`, `"formatted_text"`, `"srt"`, `"vtt"`. Default: `"plain_text"` |
 | `translate` | bool | Translate to English. Default: `false` |
 | `language` | str | Language code, or `null` for auto-detection. Default: `null` |
@@ -168,6 +168,27 @@ inference time, and
 per-word probability through this route, so `probability` is `null`; the
 worker never invents confidence. Unsupported declared languages fail with a
 request to route the source to Whisper.
+
+Explicit English requests can additionally select `force_align:true`. After
+Parakeet recognition completes, `ParakeetAcousticAlignment` passes the original
+recognized words and native timing to the existing wav2vec2 aligner. It accepts
+no caller-supplied transcript. Recognition evidence stays unchanged, including
+the distinction between a language hint and model detection. A conflicting
+detected language cannot receive English alignment.
+
+Supported words retain their original timing under `native_timing`, while their
+current `timestamp_source` becomes `WAV2VEC2_CTC` and `timestamp_authority` becomes
+`NP_SBV2_ACOUSTIC`. Unsupported words keep their native geometry and explicitly
+lack alignment authority. Word identity, ordered geometry and source bounds are
+validated; an invalid or failed alignment preserves the already recognized text
+and reports `alignment.status:FAILED` without redispatching ASR. Probability
+remains null. Neither acoustic enrichment nor model agreement establishes correct
+editorial decisions, Natural Landing approval, or creator acceptance. Studio's
+transcript-quality and boundary checks remain necessary, including for stretched
+words. Default Whisper routing and unaligned Parakeet requests are unchanged.
+
+This option requires an image containing the new helper. Source tests and local
+audio replay do not establish deployment or public Studio availability.
 
 ### SaT punctuation window and arrival-batch probes (experimental)
 

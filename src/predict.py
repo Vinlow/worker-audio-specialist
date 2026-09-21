@@ -47,6 +47,7 @@ from hf_auth import normalize_hf_token_env
 from model_manifest import WHISPER_MODEL_REVISIONS
 from model_load_lock import serialized_model_load
 from parakeet_transcriber import ParakeetTranscriber
+from parakeet_acoustic_alignment import ParakeetAcousticAlignment
 from sat_punctuator import SaTPunctuator
 
 def parse_suppress_tokens(raw):
@@ -292,8 +293,8 @@ class Predictor:
                 )
             if clap_queries:
                 incompatible_features.append("clap_queries")
-            if force_align:
-                incompatible_features.append("force_align")
+            if force_align and (not word_timestamps or language != "en"):
+                incompatible_features.append("force_align requires word_timestamps and explicit language=en")
             if diarize:
                 incompatible_features.append("diarize")
             if enable_vad:
@@ -303,11 +304,17 @@ class Predictor:
                     "Experimental Parakeet backend does not yet support: "
                     + ", ".join(incompatible_features)
                 )
-            return self.parakeet_transcriber.transcribe(
+            recognized = self.parakeet_transcriber.transcribe(
                 str(audio),
                 language_hint=language,
                 include_word_timestamps=word_timestamps,
             )
+            if force_align:
+                return ParakeetAcousticAlignment.apply(
+                    audio, recognized, self.aligner,
+                    "cuda" if rp_cuda.is_available() else "cpu",
+                )
+            return recognized
 
         if model_name not in AVAILABLE_MODELS:
             raise ValueError(
