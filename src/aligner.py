@@ -386,7 +386,6 @@ class Wav2Vec2Aligner:
             # Per-frame token assignments (includes blanks). Used to find
             # silence-run boundaries around each word for cut-friendly timing.
             aligned_tokens_arr = aligned_tokens[0].cpu()  # shape (T_emission,)
-            n_emission_frames = int(aligned_tokens_arr.shape[0])
 
             # Re-group token_spans into per-word lists using char counts.
             cursor = 0
@@ -416,30 +415,15 @@ class Wav2Vec2Aligner:
                 # mid-phoneme.
                 #
                 # Same logic forward for the offset end.
-                onset_frame = start_frame
-                while (
-                    onset_frame > 0
-                    and int(aligned_tokens_arr[onset_frame - 1]) == BLANK_IDX
-                ):
-                    onset_frame -= 1
-                # onset_frame now == start_frame (no preceding blanks) OR
-                # the first frame of the contiguous blank run before this word
-                # (which is the frame right after the previous non-blank).
-
-                offset_frame = end_frame
-                while (
-                    offset_frame < n_emission_frames - 1
-                    and int(aligned_tokens_arr[offset_frame + 1]) == BLANK_IDX
-                ):
-                    offset_frame += 1
-                # offset_frame now == end_frame (no trailing blanks) OR the
-                # last frame of the contiguous blank run after this word.
+                onset_frame, offset_frame = self._acoustic_frame_envelope(
+                    aligned_tokens_arr, start_frame, end_frame,
+                )
 
                 abs_start = chunk_start_sec + start_frame * sec_per_frame
                 abs_end = chunk_start_sec + end_frame * sec_per_frame
                 abs_onset = chunk_start_sec + onset_frame * sec_per_frame
-                # +1 because end_frame/offset_frame is inclusive
-                abs_offset = chunk_start_sec + (offset_frame + 1) * sec_per_frame
+                # TokenSpan.end and offset_frame are exclusive frame boundaries.
+                abs_offset = chunk_start_sec + offset_frame * sec_per_frame
 
                 new_word = dict(words[words_idx])
                 new_word["start"] = float(abs_start)
@@ -474,3 +458,15 @@ class Wav2Vec2Aligner:
             flush=True,
         )
         return result
+
+    @staticmethod
+    def _acoustic_frame_envelope(tokens, start_frame, end_frame):
+        """Extend a half-open TokenSpan only across its adjacent blank frames."""
+        if not 0 <= start_frame < end_frame <= len(tokens):
+            raise ValueError("Invalid half-open CTC token span")
+        onset_frame, offset_frame = start_frame, end_frame
+        while onset_frame > 0 and int(tokens[onset_frame - 1]) == BLANK_IDX:
+            onset_frame -= 1
+        while offset_frame < len(tokens) and int(tokens[offset_frame]) == BLANK_IDX:
+            offset_frame += 1
+        return onset_frame, offset_frame

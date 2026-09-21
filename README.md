@@ -33,6 +33,11 @@ exists, alignment fails explicitly and the predictor preserves native Whisper
 output with failed alignment status. Non-vocabulary tokens retain their
 explicit non-authoritative fallback marker and original text/timing.
 
+CTC token spans use exclusive end-frame boundaries. Acoustic envelopes extend
+only through immediately adjacent blank frames, including at EOF; they never
+add a frame beyond the audio or cross the next non-blank token. Regression
+tests use actual torchaudio token merging to pin these boundary semantics.
+
 Whisper models stay **resident** once loaded (multi-model residency): a request for `small` no longer evicts `large-v3`, so mixed traffic (Studio chunks + tools presets + the `medium` fallback) avoids model-reload churn. A resident Whisper model is evicted only when a load fails with classified resource exhaustion; authentication, artifact, and network failures leave healthy models intact.
 
 Cold construction of CLAP, wav2vec2, pyannote, Parakeet, and SaT is serialized
