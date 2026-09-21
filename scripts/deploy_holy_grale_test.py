@@ -103,6 +103,9 @@ class RunPodClient:
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self._api_key}",
+            # RunPod's edge rejects urllib's default agent before API auth.
+            # Identify this client truthfully; do not impersonate a browser.
+            "User-Agent": "Web2Labs-AudioWorker-Deployment/1.0",
         }
         if payload is not None:
             encoded_payload = json.dumps(payload, separators=(",", ":")).encode(

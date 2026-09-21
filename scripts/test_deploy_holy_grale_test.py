@@ -359,6 +359,18 @@ class HolyGraleTestDeployerTest(unittest.TestCase):
 
 
 class RunPodClientTest(unittest.TestCase):
+    def test_identifies_deployment_client_to_runpod_edge(self):
+        client = deploy.RunPodClient("api-secret")
+        response = io.BytesIO(b'{"id":"dx99xymo20v3o9"}')
+        response.headers = {}
+        with patch.object(client._opener, "open", return_value=response) as opener:
+            result = client.request_json("GET", deploy.ENDPOINT_PATH)
+        request = opener.call_args.args[0]
+        self.assertEqual(result["id"], deploy.ENDPOINT_ID)
+        self.assertEqual(request.get_header("User-agent"), "Web2Labs-AudioWorker-Deployment/1.0")
+        self.assertEqual(request.get_header("Authorization"), "Bearer api-secret")
+        self.assertEqual(request.full_url, deploy.RUNPOD_API_BASE + deploy.ENDPOINT_PATH)
+
     def test_uses_v1_base_and_refuses_absolute_paths(self):
         client = deploy.RunPodClient("api-secret")
 
