@@ -207,12 +207,11 @@ audio replay do not establish deployment or public Studio availability.
 
 ### SaT punctuation window and arrival-batch probes (experimental)
 
-The opt-in Parakeet acoustic-alignment router changes the exact SaT source
-contract to
-`sha256:643c91c22bceaefb892793ed652b579400b7db03c59a8d19af70a5828049e017`.
-SaT model, request and inference code are unchanged, but the contract includes
-the entire `predict.py` router. Clients pinned to the previous
-`sha256:04c110545a12504c89be2c7b611a6ab772a966e8b8912d4bbd4fa0bccff239a3`
+The invocation-local handler timing fix changes the exact SaT source contract to
+`sha256:aaa6dfa9705fde1391ccfbcffcbe7a1a739797d78d506586465761fccd90ec66`.
+SaT model, request and inference behavior are unchanged, but the contract includes
+the whole handler and its new timing helper. Clients pinned to the prior
+`sha256:643c91c22bceaefb892793ed652b579400b7db03c59a8d19af70a5828049e017`
 must coordinate their exact expected identity before this image is deployed to
 a shared endpoint. Never forge the old identity or remove the caller's check.
 Hosted source CI checks this fingerprint before the expensive image build.

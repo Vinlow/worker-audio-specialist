@@ -49,6 +49,7 @@ SAT_SOURCE_CONTRACT_ROUTE = "sat_punctuation_batch_probe"
 SAT_SOURCE_CONTRACT_FILES = {
     "src/predict.py": Path(__file__).with_name("predict.py"),
     "src/rp_handler.py": Path(__file__).with_name("rp_handler.py"),
+    "src/job_stage_timer.py": Path(__file__).with_name("job_stage_timer.py"),
     "src/sat_punctuator.py": Path(__file__),
 }
 
@@ -70,7 +71,7 @@ def normalized_source_sha256(path: Path) -> str:
 
 @lru_cache(maxsize=1)
 def source_contract_id() -> str:
-    """Bind the SaT route to its three exact executable source files."""
+    """Bind the SaT route and handler timing helper to exact source files."""
     body = {
         "kind": SAT_SOURCE_CONTRACT_KIND,
         "route": SAT_SOURCE_CONTRACT_ROUTE,
