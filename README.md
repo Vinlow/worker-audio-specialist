@@ -25,6 +25,12 @@ One upload, two signals: transcript + audio understanding. v2.
 
 All models run on the same GPU, sharing the audio file. CLAP overlaps the CTranslate2 Whisper phase, then joins before wav2vec2 alignment or pyannote inference so the heavy PyTorch activation peaks do not stack. Forced alignment adds ~30-50% of the Whisper wall time.
 
+Handler stage timings use invocation-local state. RunPod 1.8.2's debugger timer
+registers names globally, so repeated or overlapping jobs can collide and even
+skip cleanup when its timer raises. `JobStageTimer` logs bounded stage durations
+without that registry; an unavailable log stream cannot fail inference or cleanup.
+This changes instrumentation only, not recognition, alignment or model selection.
+
 Overlapping wav2vec2 windows contribute measured word candidates to
 `alignment_window_stitcher.py`. It selects one complete sequence with ordered
 lexical timing and acoustic envelopes, preferring words with more surrounding

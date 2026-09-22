@@ -1,9 +1,7 @@
 """
 rp_handler.py for runpod worker
 
-rp_debugger:
-- Utility that provides additional debugging information.
-The handler must be called with --rp_debugger flag to enable it.
+Stage timing is invocation-local, including on reused and concurrent workers.
 """
 import base64
 import binascii
@@ -22,7 +20,8 @@ import urllib.request
 import numpy as np
 
 from rp_schema import INPUT_VALIDATIONS
-from runpod.serverless.utils import rp_cleanup, rp_debugger
+from runpod.serverless.utils import rp_cleanup
+from job_stage_timer import JobStageTimer
 from runpod.serverless.utils.rp_validator import validate
 import runpod
 import predict
@@ -1041,11 +1040,11 @@ def run_final_span_stream_job(job, job_input, span_stream):
             span_error = None
             span_stage = 'span_download'
             try:
-                with rp_debugger.LineTimer(f'span_{span_pos}_download_step'):
+                with JobStageTimer(f'span_{span_pos}_download_step'):
                     audio_input = download_audio_url(audio_url, span_stage)
 
                 span_stage = 'prediction'
-                with rp_debugger.LineTimer(f'span_{span_pos}_prediction_step'):
+                with JobStageTimer(f'span_{span_pos}_prediction_step'):
                     whisper_results = MODEL.predict(
                         audio=audio_input,
                         model_name=job_input["model"],
@@ -1130,7 +1129,7 @@ def run_final_span_stream_job(job, job_input, span_stream):
                 continue
             yield span_result
     finally:
-        with rp_debugger.LineTimer('span_stream_cleanup_step'):
+        with JobStageTimer('span_stream_cleanup_step'):
             cleanup_job_artifacts(job.get('id'))
 
     if failed_span_indexes:
@@ -1198,7 +1197,7 @@ def run_draft_span_stream_job(job, job_input, span_stream):
             poll_url = update_url_cursor(next_url, cursor)
             current_poll_index = poll_index
             poll_index += 1
-            with rp_debugger.LineTimer(f'draft_poll_step_{current_poll_index}'):
+            with JobStageTimer(f'draft_poll_step_{current_poll_index}'):
                 draft_audio = fetch_draft_audio(
                     job.get('id'),
                     poll_url,
@@ -1257,7 +1256,7 @@ def run_draft_span_stream_job(job, job_input, span_stream):
                     )
 
                 prediction_started = time.monotonic()
-                with rp_debugger.LineTimer(f'draft_prediction_step_{yield_index}'):
+                with JobStageTimer(f'draft_prediction_step_{yield_index}'):
                     whisper_results = MODEL.predict(
                         audio=audio_input,
                         model_name='turbo',
@@ -1323,7 +1322,7 @@ def run_draft_span_stream_job(job, job_input, span_stream):
 
         yield closed('budget_exhausted')
     finally:
-        with rp_debugger.LineTimer('draft_span_stream_cleanup_step'):
+        with JobStageTimer('draft_span_stream_cleanup_step'):
             for path in temp_paths:
                 try:
                     os.unlink(path)
@@ -1356,7 +1355,7 @@ def run_draft_warmup_span_stream_job(job, job_input, span_stream):
             },
         })
     finally:
-        with rp_debugger.LineTimer('draft_warmup_cleanup_step'):
+        with JobStageTimer('draft_warmup_cleanup_step'):
             cleanup_job_artifacts(job.get('id'))
 
 
@@ -1454,7 +1453,7 @@ def run_whisper_job(job):
             'yield_index': -1,
         }
 
-    with rp_debugger.LineTimer('validation_step'):
+    with JobStageTimer('validation_step'):
         input_validation = validate(job_input, INPUT_VALIDATIONS)
 
         if 'errors' in input_validation:
@@ -1583,7 +1582,7 @@ def run_whisper_job(job):
     try:
         if job_input.get('audio', False):
             try:
-                with rp_debugger.LineTimer('download_step'):
+                with JobStageTimer('download_step'):
                     audio_temp_path = download_audio_url(
                         job_input['audio'],
                         'classic_download',
@@ -1606,7 +1605,7 @@ def run_whisper_job(job):
                 return
             audio_input = audio_temp_path
 
-        with rp_debugger.LineTimer('prediction_step'):
+        with JobStageTimer('prediction_step'):
             whisper_results = MODEL.predict(
                 audio=audio_input,
                 model_name=job_input["model"],
@@ -1639,7 +1638,7 @@ def run_whisper_job(job):
         # Always clean up job artifacts — success, MEDIA_FETCH_FAILED return, or
         # a predict() exception. Before the try/finally, any exception skipped
         # cleanup and leaked the downloaded audio on the warm worker.
-        with rp_debugger.LineTimer('cleanup_step'):
+        with JobStageTimer('cleanup_step'):
             cleanup_job_artifacts(job.get('id'), audio_temp_path)
 
     # If TEST_OUTPUT_PATH is set (local Docker test mode), dump the full result

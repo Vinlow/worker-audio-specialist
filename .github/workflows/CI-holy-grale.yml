@@ -26,6 +26,10 @@ jobs:
         run: python -m unittest discover -v -s src -p 'test_alignment_window_stitcher.py'
       - name: Verify punctuation source identity without loading models
         run: python -m unittest discover -v -s src -p 'test_sat_punctuator.py'
+      - name: Verify repeated worker-job timing and cleanup
+        run: python -m unittest discover -v -s src -p 'test_job_stage_timer.py'
+      - name: Verify handler routing and warm-job cleanup without loading models
+        run: python -m unittest discover -v -s src -p 'test_rp_handler*.py'
 
       # Image builds are deliberately NOT scheduled by a push. The image is too
       # large for GitHub's standard 14 GB runner and silently queued for 24 hours
