@@ -31,6 +31,7 @@ Notes:
 """
 
 import gc
+import math
 import re
 import threading
 from typing import List, Optional, Tuple
@@ -343,7 +344,7 @@ class Wav2Vec2Aligner:
                 emissions, _ = self.model(chunk_audio)
             emissions = torch.log_softmax(emissions, dim=-1)
             emission = emissions[0]  # (T, vocab)
-            sec_per_frame = chunk_dur / emission.shape[0]
+            frame_count = emission.shape[0]
 
             targets = torch.tensor([tokens], device=self.device, dtype=torch.int32)
 
@@ -419,11 +420,11 @@ class Wav2Vec2Aligner:
                     aligned_tokens_arr, start_frame, end_frame,
                 )
 
-                abs_start = chunk_start_sec + start_frame * sec_per_frame
-                abs_end = chunk_start_sec + end_frame * sec_per_frame
-                abs_onset = chunk_start_sec + onset_frame * sec_per_frame
+                abs_start = self._frame_time(start_frame, frame_count, chunk_start_sec, chunk_end_sec)
+                abs_end = self._frame_time(end_frame, frame_count, chunk_start_sec, chunk_end_sec)
+                abs_onset = self._frame_time(onset_frame, frame_count, chunk_start_sec, chunk_end_sec)
                 # TokenSpan.end and offset_frame are exclusive frame boundaries.
-                abs_offset = chunk_start_sec + offset_frame * sec_per_frame
+                abs_offset = self._frame_time(offset_frame, frame_count, chunk_start_sec, chunk_end_sec)
 
                 new_word = dict(words[words_idx])
                 new_word["start"] = float(abs_start)
@@ -458,6 +459,26 @@ class Wav2Vec2Aligner:
             flush=True,
         )
         return result
+
+    @staticmethod
+    def _frame_time(frame, frame_count, window_start, window_end):
+        """Map a measured frame boundary to its window, preserving exact endpoints.
+
+        Dividing duration first can make the final frame exceed EOF by one ULP
+        (28 / 1399 * 1399 == 28.000000000000004). Endpoint identities are exact;
+        invalid frame indices still fail instead of being clamped into the WAV.
+        """
+        if (isinstance(frame, bool) or not isinstance(frame, int)
+                or isinstance(frame_count, bool) or not isinstance(frame_count, int)
+                or frame_count <= 0 or not 0 <= frame <= frame_count
+                or not math.isfinite(window_start) or not math.isfinite(window_end)
+                or window_start < 0 or window_end <= window_start):
+            raise ValueError("Invalid CTC frame clock")
+        if frame == 0:
+            return window_start
+        if frame == frame_count:
+            return window_end
+        return window_start + (frame / frame_count) * (window_end - window_start)
 
     @staticmethod
     def _acoustic_frame_envelope(tokens, start_frame, end_frame):

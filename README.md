@@ -37,6 +37,10 @@ CTC token spans use exclusive end-frame boundaries. Acoustic envelopes extend
 only through immediately adjacent blank frames, including at EOF; they never
 add a frame beyond the audio or cross the next non-blank token. Regression
 tests use actual torchaudio token merging to pin these boundary semantics.
+Frame-to-time conversion preserves the measured window endpoints exactly. It
+does not let floating-point multiplication turn a final frame at 28 seconds
+into 28.000000000000004 and invalidate every word. Invalid frame indices still
+fail; the strict acoustic candidate validator has no tolerance or clamping.
 
 Whisper models stay **resident** once loaded (multi-model residency): a request for `small` no longer evicts `large-v3`, so mixed traffic (Studio chunks + tools presets + the `medium` fallback) avoids model-reload churn. A resident Whisper model is evicted only when a load fails with classified resource exhaustion; authentication, artifact, and network failures leave healthy models intact.
 
