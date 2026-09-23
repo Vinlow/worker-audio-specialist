@@ -24,6 +24,10 @@ jobs:
         run: python -m unittest -v scripts.test_deploy_holy_grale_test
       - name: Verify acoustic window joins without loading models
         run: python -m unittest discover -v -s src -p 'test_alignment_window_stitcher.py'
+      - name: Verify supplied-text alignment and handler routing without loading models
+        run: |
+          python -m unittest discover -v -s src -p 'test_supplied_text_aligner.py'
+          python -m unittest discover -v -s src -p 'test_rp_handler_hardening.py'
 
       # Image builds are deliberately NOT scheduled by a push. The image is too
       # large for GitHub's standard 14 GB runner and silently queued for 24 hours

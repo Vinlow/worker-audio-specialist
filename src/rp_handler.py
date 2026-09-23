@@ -1399,8 +1399,10 @@ def run_whisper_job(job):
     # Extract clap_queries before validation — rp_validator chokes on dict types
     raw_clap_queries = job_input.pop('clap_queries', _MISSING)
     raw_span_stream = job_input.pop('span_stream', _MISSING)
+    raw_alignment_segments = job_input.pop('alignment_segments', _MISSING)
     clap_queries_present = raw_clap_queries is not _MISSING
     span_stream_present = raw_span_stream is not _MISSING
+    alignment_segments_present = raw_alignment_segments is not _MISSING
     clap_queries_error = (
         validate_clap_queries(raw_clap_queries)
         if clap_queries_present
@@ -1425,7 +1427,13 @@ def run_whisper_job(job):
     # RunPod serverless streaming jobs can be retried as timed out if a cold
     # worker spends too long loading models before the first stream item.
     # Emit a cheap control item immediately; Studio ignores unknown events.
-    if raw_sat_punctuation_batch_probe is not None:
+    if alignment_segments_present:
+        yield {
+            'mode': 'supplied_text_alignment',
+            'event': 'started',
+            'yield_index': -1,
+        }
+    elif raw_sat_punctuation_batch_probe is not None:
         yield {
             'mode': 'sat_punctuation_batch_probe',
             'event': 'started',
@@ -1468,6 +1476,44 @@ def run_whisper_job(job):
     if span_stream_error:
         yield {'error': span_stream_error}
         return
+
+    if alignment_segments_present:
+        try:
+            MODEL.supplied_text_aligner.validate_segments(
+                raw_alignment_segments
+            )
+        except ValueError as error:
+            yield {'error': str(error)}
+            return
+        if (
+            span_stream_present
+            or clap_queries_present
+            or raw_sat_punctuation_probe is not None
+            or raw_sat_punctuation_batch_probe is not None
+        ):
+            yield {
+                'error': (
+                    'alignment_segments cannot be combined with span_stream, '
+                    'clap_queries, or SaT probes'
+                )
+            }
+            return
+        if (
+            job_input['asr_backend'] != 'whisper'
+            or job_input.get('translate')
+            or job_input.get('diarize')
+            or not job_input.get('word_timestamps')
+            or not job_input.get('force_align')
+            or job_input.get('language') not in (None, 'en')
+        ):
+            yield {
+                'error': (
+                    'alignment_segments requires English Whisper routing with '
+                    'word_timestamps and force_align enabled, without translation '
+                    'or diarization'
+                )
+            }
+            return
 
     # Restore the already-validated special field after rp_validator.
     if clap_queries_present:
@@ -1607,34 +1653,41 @@ def run_whisper_job(job):
             audio_input = audio_temp_path
 
         with rp_debugger.LineTimer('prediction_step'):
-            whisper_results = MODEL.predict(
-                audio=audio_input,
-                model_name=job_input["model"],
-                asr_backend=job_input["asr_backend"],
-                transcription=job_input["transcription"],
-                translation=job_input["translation"],
-                translate=job_input["translate"],
-                language=job_input["language"],
-                temperature=job_input["temperature"],
-                best_of=job_input["best_of"],
-                beam_size=job_input["beam_size"],
-                patience=job_input["patience"],
-                length_penalty=job_input["length_penalty"],
-                suppress_tokens=job_input.get("suppress_tokens", "-1"),
-                initial_prompt=job_input["initial_prompt"],
-                condition_on_previous_text=job_input["condition_on_previous_text"],
-                temperature_increment_on_fallback=job_input["temperature_increment_on_fallback"],
-                compression_ratio_threshold=job_input["compression_ratio_threshold"],
-                logprob_threshold=job_input["logprob_threshold"],
-                no_speech_threshold=job_input["no_speech_threshold"],
-                enable_vad=job_input["enable_vad"],
-                word_timestamps=job_input["word_timestamps"],
-                clap_queries=job_input.get("clap_queries"),
-                force_align=job_input.get("force_align", False),
-                diarize=job_input.get("diarize", False),
-                diarize_min_speakers=job_input.get("diarize_min_speakers") or None,
-                diarize_max_speakers=job_input.get("diarize_max_speakers") or None,
-            )
+            if alignment_segments_present:
+                whisper_results = MODEL.align_supplied_text(
+                    audio_input,
+                    raw_alignment_segments,
+                    language_code='en',
+                )
+            else:
+                whisper_results = MODEL.predict(
+                    audio=audio_input,
+                    model_name=job_input["model"],
+                    asr_backend=job_input["asr_backend"],
+                    transcription=job_input["transcription"],
+                    translation=job_input["translation"],
+                    translate=job_input["translate"],
+                    language=job_input["language"],
+                    temperature=job_input["temperature"],
+                    best_of=job_input["best_of"],
+                    beam_size=job_input["beam_size"],
+                    patience=job_input["patience"],
+                    length_penalty=job_input["length_penalty"],
+                    suppress_tokens=job_input.get("suppress_tokens", "-1"),
+                    initial_prompt=job_input["initial_prompt"],
+                    condition_on_previous_text=job_input["condition_on_previous_text"],
+                    temperature_increment_on_fallback=job_input["temperature_increment_on_fallback"],
+                    compression_ratio_threshold=job_input["compression_ratio_threshold"],
+                    logprob_threshold=job_input["logprob_threshold"],
+                    no_speech_threshold=job_input["no_speech_threshold"],
+                    enable_vad=job_input["enable_vad"],
+                    word_timestamps=job_input["word_timestamps"],
+                    clap_queries=job_input.get("clap_queries"),
+                    force_align=job_input.get("force_align", False),
+                    diarize=job_input.get("diarize", False),
+                    diarize_min_speakers=job_input.get("diarize_min_speakers") or None,
+                    diarize_max_speakers=job_input.get("diarize_max_speakers") or None,
+                )
     finally:
         # Always clean up job artifacts — success, MEDIA_FETCH_FAILED return, or
         # a predict() exception. Before the try/finally, any exception skipped

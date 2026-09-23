@@ -92,6 +92,7 @@ never trigger a mutable Hugging Face download.
 | `language` | str | Language code, or `null` for auto-detection. Default: `null` |
 | `word_timestamps` | bool | Include per-word timestamps and probability. Default: `false` |
 | `force_align` | bool | Re-time supported-language `word_timestamps` via wav2vec2 CTC alignment and add per-word `onset_start`/`offset_end` evidence. Requires `word_timestamps: true`. The current model supports English only; unsupported languages fail soft with an explicit status. Default: `false` |
+| `alignment_segments` | array | Align caller-supplied English segment text to the exact audio without another ASR pass. Each `{start,end,text}` bound is routing geometry only; accepted word timing comes from wav2vec2. Requires `word_timestamps:true`, `force_align:true`, and cannot be combined with span streaming, CLAP, SaT, translation, or diarization. |
 | `diarize` | bool | Experimental speaker diarization sidecar. Requires `word_timestamps: true` for word attribution. Default: `false` |
 | `diarize_min_speakers` | int | Optional minimum speaker hint from 0–64. `0` means automatic. |
 | `diarize_max_speakers` | int | Optional maximum speaker hint from 0–64. `0` means automatic. |
@@ -244,6 +245,13 @@ Words the aligner cannot handle keep their original Whisper timing and have no
 `onset_start`/`offset_end`. An alignment load or inference failure is fail-soft:
 the already-valid Whisper transcript is returned with
 `alignment.status: "FAILED"` and `word_timestamps_aligned: false`.
+
+Supplied-text alignment additionally returns a fail-closed admission receipt.
+Every word must retain acoustic authority, stay within 750ms of its independent
+segment window, remain at most 1.25s long, and meet the measured CTC mean-score
+floor. Spoken editing commands use a stricter score floor. The worker returns
+all measured evidence when this receipt is rejected; callers must preserve the
+original source audio rather than treating rejected geometry as editable.
 
 ### Speaker diarization sidecar (experimental)
 

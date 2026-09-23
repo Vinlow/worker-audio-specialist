@@ -48,6 +48,7 @@ from model_manifest import WHISPER_MODEL_REVISIONS
 from model_load_lock import serialized_model_load
 from parakeet_transcriber import ParakeetTranscriber
 from sat_punctuator import SaTPunctuator
+from supplied_text_aligner import SuppliedTextAligner
 
 def parse_suppress_tokens(raw):
     """
@@ -98,6 +99,7 @@ class Predictor:
         self.diarizer = SpeakerDiarizer()  # lazy-loaded on first diarize call
         self.parakeet_transcriber = ParakeetTranscriber()
         self.sat_punctuator = SaTPunctuator()
+        self.supplied_text_aligner = SuppliedTextAligner(self.aligner)
         self._warmup_thread = None
 
     def setup(self):
@@ -172,6 +174,16 @@ class Predictor:
     def predict_punctuation_batch(self, request):
         """Run one bounded diagnostic SaT arrival batch."""
         return self.sat_punctuator.infer_batch(request)
+
+    def align_supplied_text(self, audio, segments, language_code="en"):
+        """Align independently recognized text without running another ASR."""
+        result = self.supplied_text_aligner.align(
+            str(audio),
+            segments,
+            language_code=language_code,
+        )
+        result["device"] = "cuda" if rp_cuda.is_available() else "cpu"
+        return result
 
     def _load_model_locked(self, model_name):
         """

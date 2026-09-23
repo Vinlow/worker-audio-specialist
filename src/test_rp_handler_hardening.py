@@ -244,6 +244,65 @@ class HandlerHardeningTests(unittest.TestCase):
             self.assertEqual(events[0]['event'], 'started')
             self.assertIn('clap_queries', events[1]['error'])
 
+    def test_supplied_text_alignment_uses_audio_without_running_asr(self):
+        segments = [{'start': 0.1, 'end': 0.9, 'text': 'Keep this.'}]
+        result = {
+            'word_timestamps': [{'word': 'Keep', 'start': 0.12, 'end': 0.35}],
+            'alignment': {'status': 'ALIGNED_SUPPORTED'},
+        }
+        model = types.SimpleNamespace(
+            supplied_text_aligner=types.SimpleNamespace(
+                validate_segments=mock.Mock(return_value=segments),
+            ),
+            align_supplied_text=mock.Mock(return_value=result),
+            predict=mock.Mock(side_effect=AssertionError('ASR must not run')),
+        )
+        with (
+            mock.patch.object(self.handler, 'MODEL', model),
+            mock.patch.object(self.handler, 'download_audio_url', return_value='source.wav'),
+            mock.patch.object(self.handler, 'cleanup_job_artifacts'),
+        ):
+            events = list(self.handler.run_whisper_job({
+                'id': 'supplied-text-test',
+                'input': {
+                    'audio': 'https://example.test/source.wav',
+                    'alignment_segments': segments,
+                    'word_timestamps': True,
+                    'force_align': True,
+                    'language': 'en',
+                },
+            }))
+        self.assertEqual(events[0]['mode'], 'supplied_text_alignment')
+        self.assertEqual(events[-1], result)
+        model.align_supplied_text.assert_called_once_with(
+            'source.wav', segments, language_code='en',
+        )
+        model.predict.assert_not_called()
+
+    def test_supplied_text_alignment_rejects_conflicting_mode_before_fetch(self):
+        segments = [{'start': 0.1, 'end': 0.9, 'text': 'Keep this.'}]
+        model = types.SimpleNamespace(
+            supplied_text_aligner=types.SimpleNamespace(
+                validate_segments=mock.Mock(return_value=segments),
+            ),
+        )
+        with (
+            mock.patch.object(self.handler, 'MODEL', model),
+            mock.patch.object(self.handler, 'download_audio_url') as fetch,
+        ):
+            events = list(self.handler.run_whisper_job({
+                'id': 'supplied-text-conflict',
+                'input': {
+                    'audio': 'https://example.test/source.wav',
+                    'alignment_segments': segments,
+                    'word_timestamps': True,
+                    'force_align': True,
+                    'diarize': True,
+                },
+            }))
+        self.assertIn('without translation or diarization', events[-1]['error'])
+        fetch.assert_not_called()
+
     def test_span_stream_rejects_classic_audio_and_diarization_bounds(self):
         span_stream = {'mode': 'draft_warmup'}
         events = list(self.handler.run_whisper_job({

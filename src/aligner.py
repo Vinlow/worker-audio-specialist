@@ -453,6 +453,11 @@ class Wav2Vec2Aligner:
                 new_word["alignment_authority"] = True
                 new_word["alignment_model_id"] = ALIGNMENT_MODEL_ID
                 new_word["alignment_language"] = normalized_language
+                word_scores = [float(span.score) for span in spans_for_word]
+                new_word["alignment_score_mean"] = float(
+                    sum(word_scores) / len(word_scores)
+                )
+                new_word["alignment_score_min"] = float(min(word_scores))
                 candidates[words_idx].append(AlignmentWindowCandidate(
                     new_word, chunk_idx, chunk_start_sec, chunk_end_sec,
                 ))
