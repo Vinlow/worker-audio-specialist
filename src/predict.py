@@ -533,7 +533,8 @@ class Predictor:
                             # destroy or replay that paid work.
                             print(
                                 "[Predictor] Forced alignment failed; "
-                                f"preserving Whisper geometry: {type(error).__name__}",
+                                f"preserving Whisper geometry: {type(error).__name__}: "
+                                f"{str(error)[:200]}",
                                 flush=True,
                             )
                             alignment_evidence["status"] = "FAILED"
