@@ -31,6 +31,7 @@ Notes:
 """
 
 import gc
+import math
 import re
 import threading
 from typing import List, Optional, Tuple
@@ -343,7 +344,7 @@ class Wav2Vec2Aligner:
                 emissions, _ = self.model(chunk_audio)
             emissions = torch.log_softmax(emissions, dim=-1)
             emission = emissions[0]  # (T, vocab)
-            sec_per_frame = chunk_dur / emission.shape[0]
+            frame_count = emission.shape[0]
 
             targets = torch.tensor([tokens], device=self.device, dtype=torch.int32)
 
@@ -386,7 +387,6 @@ class Wav2Vec2Aligner:
             # Per-frame token assignments (includes blanks). Used to find
             # silence-run boundaries around each word for cut-friendly timing.
             aligned_tokens_arr = aligned_tokens[0].cpu()  # shape (T_emission,)
-            n_emission_frames = int(aligned_tokens_arr.shape[0])
 
             # Re-group token_spans into per-word lists using char counts.
             cursor = 0
@@ -416,30 +416,15 @@ class Wav2Vec2Aligner:
                 # mid-phoneme.
                 #
                 # Same logic forward for the offset end.
-                onset_frame = start_frame
-                while (
-                    onset_frame > 0
-                    and int(aligned_tokens_arr[onset_frame - 1]) == BLANK_IDX
-                ):
-                    onset_frame -= 1
-                # onset_frame now == start_frame (no preceding blanks) OR
-                # the first frame of the contiguous blank run before this word
-                # (which is the frame right after the previous non-blank).
+                onset_frame, offset_frame = self._acoustic_frame_envelope(
+                    aligned_tokens_arr, start_frame, end_frame,
+                )
 
-                offset_frame = end_frame
-                while (
-                    offset_frame < n_emission_frames - 1
-                    and int(aligned_tokens_arr[offset_frame + 1]) == BLANK_IDX
-                ):
-                    offset_frame += 1
-                # offset_frame now == end_frame (no trailing blanks) OR the
-                # last frame of the contiguous blank run after this word.
-
-                abs_start = chunk_start_sec + start_frame * sec_per_frame
-                abs_end = chunk_start_sec + end_frame * sec_per_frame
-                abs_onset = chunk_start_sec + onset_frame * sec_per_frame
-                # +1 because end_frame/offset_frame is inclusive
-                abs_offset = chunk_start_sec + (offset_frame + 1) * sec_per_frame
+                abs_start = self._frame_time(start_frame, frame_count, chunk_start_sec, chunk_end_sec)
+                abs_end = self._frame_time(end_frame, frame_count, chunk_start_sec, chunk_end_sec)
+                abs_onset = self._frame_time(onset_frame, frame_count, chunk_start_sec, chunk_end_sec)
+                # TokenSpan.end and offset_frame are exclusive frame boundaries.
+                abs_offset = self._frame_time(offset_frame, frame_count, chunk_start_sec, chunk_end_sec)
 
                 new_word = dict(words[words_idx])
                 new_word["start"] = float(abs_start)
@@ -479,3 +464,35 @@ class Wav2Vec2Aligner:
             flush=True,
         )
         return result
+
+    @staticmethod
+    def _frame_time(frame, frame_count, window_start, window_end):
+        """Map a measured frame boundary to its window, preserving exact endpoints.
+
+        Dividing duration first can make the final frame exceed EOF by one ULP
+        (28 / 1399 * 1399 == 28.000000000000004). Endpoint identities are exact;
+        invalid frame indices still fail instead of being clamped into the WAV.
+        """
+        if (isinstance(frame, bool) or not isinstance(frame, int)
+                or isinstance(frame_count, bool) or not isinstance(frame_count, int)
+                or frame_count <= 0 or not 0 <= frame <= frame_count
+                or not math.isfinite(window_start) or not math.isfinite(window_end)
+                or window_start < 0 or window_end <= window_start):
+            raise ValueError("Invalid CTC frame clock")
+        if frame == 0:
+            return window_start
+        if frame == frame_count:
+            return window_end
+        return window_start + (frame / frame_count) * (window_end - window_start)
+
+    @staticmethod
+    def _acoustic_frame_envelope(tokens, start_frame, end_frame):
+        """Extend a half-open TokenSpan only across its adjacent blank frames."""
+        if not 0 <= start_frame < end_frame <= len(tokens):
+            raise ValueError("Invalid half-open CTC token span")
+        onset_frame, offset_frame = start_frame, end_frame
+        while onset_frame > 0 and int(tokens[onset_frame - 1]) == BLANK_IDX:
+            onset_frame -= 1
+        while offset_frame < len(tokens) and int(tokens[offset_frame]) == BLANK_IDX:
+            offset_frame += 1
+        return onset_frame, offset_frame

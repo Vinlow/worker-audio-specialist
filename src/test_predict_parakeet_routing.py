@@ -72,7 +72,6 @@ class PredictorParakeetRoutingTest(unittest.TestCase):
         for feature in (
             "translate",
             "clap_queries",
-            "force_align",
             "diarize",
             "enable_vad",
         ):
@@ -80,6 +79,11 @@ class PredictorParakeetRoutingTest(unittest.TestCase):
                 f"incompatible_features.append('{feature}')",
                 method_text,
             )
+
+    def test_alignment_requires_explicit_english_and_word_timestamps(self):
+        method_text = ast.unparse(predictor_method("predict"))
+        self.assertIn("force_align and (not word_timestamps or language != 'en')", method_text)
+        self.assertIn("ParakeetAcousticAlignment.apply", method_text)
 
 
 if __name__ == "__main__":

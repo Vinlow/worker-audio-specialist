@@ -66,7 +66,7 @@ def stub_validate(values, schema):
     return {'validated_input': validated}
 
 
-def load_handler_with_stubs():
+def load_handler_with_stubs(timer=NullTimer):
     numpy_module = types.ModuleType('numpy')
     numpy_module.floating = type('floating', (float,), {})
     numpy_module.integer = type('integer', (int,), {})
@@ -88,7 +88,7 @@ def load_handler_with_stubs():
     validator_module = types.ModuleType('runpod.serverless.utils.rp_validator')
     utils_module.download_files_from_urls = lambda *_args, **_kwargs: [None]
     utils_module.rp_cleanup = types.SimpleNamespace(clean=lambda *_args: None)
-    utils_module.rp_debugger = types.SimpleNamespace(LineTimer=NullTimer)
+    utils_module.rp_debugger = types.SimpleNamespace(LineTimer=timer)
     validator_module.validate = stub_validate
     serverless_module.utils = utils_module
     serverless_module.start = lambda *_args, **_kwargs: None
@@ -164,6 +164,27 @@ class HandlerHardeningTests(unittest.TestCase):
         }
         values.update(overrides)
         return values
+
+    def test_reused_handler_does_not_register_global_sdk_timer_names(self):
+        # Model execution is isolated here; the SDK registry deliberately has
+        # the observed 1.8.2 collision behavior that the old NullTimer hid.
+        names = set()
+
+        class SharedRegistryTimer(NullTimer):
+            def __init__(self, name):
+                if name in names:
+                    raise KeyError(f'Checkpoint name "{name}" already exists.')
+                names.add(name)
+
+        handler = load_handler_with_stubs(timer=SharedRegistryTimer)
+        with mock.patch.object(handler, 'cleanup_job_artifacts') as cleanup:
+            for index in range(3):
+                events = list(handler.run_whisper_job({
+                    'id': f'reused-{index}', 'input': {'audio_base64': 'eA=='},
+                }))
+                self.assertEqual(events[-1]['transcription'], 'ok')
+            self.assertEqual(cleanup.call_count, 3)
+        self.assertEqual(names, set())
 
     def test_final_span_validation_is_bounded_unique_finite_and_http_only(self):
         valid_span = {

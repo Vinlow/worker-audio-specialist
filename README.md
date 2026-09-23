@@ -25,6 +25,12 @@ One upload, two signals: transcript + audio understanding. v2.
 
 All models run on the same GPU, sharing the audio file. CLAP overlaps the CTranslate2 Whisper phase, then joins before wav2vec2 alignment or pyannote inference so the heavy PyTorch activation peaks do not stack. Forced alignment adds ~30-50% of the Whisper wall time.
 
+Handler stage timings use invocation-local state. RunPod 1.8.2's debugger timer
+registers names globally, so repeated or overlapping jobs can collide and even
+skip cleanup when its timer raises. `JobStageTimer` logs bounded stage durations
+without that registry; an unavailable log stream cannot fail inference or cleanup.
+This changes instrumentation only, not recognition, alignment or model selection.
+
 Overlapping wav2vec2 windows contribute measured word candidates to
 `alignment_window_stitcher.py`. It selects one complete sequence with ordered
 lexical timing and acoustic envelopes, preferring words with more surrounding
@@ -32,6 +38,15 @@ audio. It never averages or clamps timestamps at a join. If no coherent path
 exists, alignment fails explicitly and the predictor preserves native Whisper
 output with failed alignment status. Non-vocabulary tokens retain their
 explicit non-authoritative fallback marker and original text/timing.
+
+CTC token spans use exclusive end-frame boundaries. Acoustic envelopes extend
+only through immediately adjacent blank frames, including at EOF; they never
+add a frame beyond the audio or cross the next non-blank token. Regression
+tests use actual torchaudio token merging to pin these boundary semantics.
+Frame-to-time conversion preserves the measured window endpoints exactly. It
+does not let floating-point multiplication turn a final frame at 28 seconds
+into 28.000000000000004 and invalidate every word. Invalid frame indices still
+fail; the strict acoustic candidate validator has no tolerance or clamping.
 
 Whisper models stay **resident** once loaded (multi-model residency): a request for `small` no longer evicts `large-v3`, so mixed traffic (Studio chunks + tools presets + the `medium` fallback) avoids model-reload churn. A resident Whisper model is evicted only when a load fails with classified resource exhaustion; authentication, artifact, and network failures leave healthy models intact.
 
@@ -86,7 +101,7 @@ never trigger a mutable Hugging Face download.
 | `sat_punctuation_probe` | dict | Explicit diagnostic-only SaT window request. Mutually exclusive with audio, `span_stream`, and `clap_queries`; see the exact contract below. |
 | `sat_punctuation_batch_probe` | dict | Explicit diagnostic-only SaT arrival batch with one to eight source windows. Mutually exclusive with the single-window probe, audio, `span_stream`, and `clap_queries`. |
 | `model` | str | Whisper model. Default: `"base"` |
-| `asr_backend` | str | `"whisper"` (default) or the explicit experimental `"parakeet"` path. Parakeet currently supports classic/final jobs only and rejects CLAP, forced alignment, diarization, translation, and VAD instead of silently ignoring them. |
+| `asr_backend` | str | `"whisper"` (default) or the explicit experimental `"parakeet"` path. Parakeet supports classic/final jobs only and rejects CLAP, diarization, translation, and VAD. Optional acoustic alignment requires both `language:"en"` and `word_timestamps:true`. |
 | `transcription` | str | Output format: `"plain_text"`, `"formatted_text"`, `"srt"`, `"vtt"`. Default: `"plain_text"` |
 | `translate` | bool | Translate to English. Default: `false` |
 | `language` | str | Language code, or `null` for auto-detection. Default: `null` |
@@ -170,7 +185,37 @@ per-word probability through this route, so `probability` is `null`; the
 worker never invents confidence. Unsupported declared languages fail with a
 request to route the source to Whisper.
 
+Explicit English requests can additionally select `force_align:true`. After
+Parakeet recognition completes, `ParakeetAcousticAlignment` passes the original
+recognized words and native timing to the existing wav2vec2 aligner. It accepts
+no caller-supplied transcript. Recognition evidence stays unchanged, including
+the distinction between a language hint and model detection. A conflicting
+detected language cannot receive English alignment.
+
+Supported words retain their original timing under `native_timing`, while their
+current `timestamp_source` becomes `WAV2VEC2_CTC` and `timestamp_authority` becomes
+`NP_SBV2_ACOUSTIC`. Unsupported words keep their native geometry and explicitly
+lack alignment authority. Word identity, ordered geometry and source bounds are
+validated; an invalid or failed alignment preserves the already recognized text
+and reports `alignment.status:FAILED` without redispatching ASR. Probability
+remains null. Neither acoustic enrichment nor model agreement establishes correct
+editorial decisions, Natural Landing approval, or creator acceptance. Studio's
+transcript-quality and boundary checks remain necessary, including for stretched
+words. Default Whisper routing and unaligned Parakeet requests are unchanged.
+
+This option requires an image containing the new helper. Source tests and local
+audio replay do not establish deployment or public Studio availability.
+
 ### SaT punctuation window and arrival-batch probes (experimental)
+
+The invocation-local handler timing fix changes the exact SaT source contract to
+`sha256:aaa6dfa9705fde1391ccfbcffcbe7a1a739797d78d506586465761fccd90ec66`.
+SaT model, request and inference behavior are unchanged, but the contract includes
+the whole handler and its new timing helper. Clients pinned to the prior
+`sha256:643c91c22bceaefb892793ed652b579400b7db03c59a8d19af70a5828049e017`
+must coordinate their exact expected identity before this image is deployed to
+a shared endpoint. Never forge the old identity or remove the caller's check.
+Hosted source CI checks this fingerprint before the expensive image build.
 
 The SaT path is selected only by sending `sat_punctuation_probe` or
 `sat_punctuation_batch_probe`; normal Whisper and Parakeet jobs never load it.
