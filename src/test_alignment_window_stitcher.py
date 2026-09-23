@@ -3,7 +3,9 @@ import json
 from pathlib import Path
 import unittest
 
-from alignment_window_stitcher import AlignmentWindowCandidate, AlignmentWindowStitcher
+from alignment_window_stitcher import (
+    AlignmentWindowCandidate, AlignmentWindowCoverage, AlignmentWindowStitcher,
+)
 
 
 def candidate(text, start, end, onset, offset, window=0, bounds=(0, 60)):
@@ -16,6 +18,28 @@ def candidate(text, start, end, onset, offset, window=0, bounds=(0, 60)):
 
 
 class AlignmentWindowStitcherTest(unittest.TestCase):
+    def test_overlap_covers_long_native_words_before_gpu_work(self):
+        # Source-backed native timing from the 97-minute Minecraft regression.
+        words = [(4490, 1980.32, 1984.56), (6698, 3132.20, 3143.12)]
+        self.assertEqual(
+            AlignmentWindowCoverage.first_uncovered_word(
+                words, 5843.32, 60, 5, 0.5,
+            ),
+            4490,
+        )
+        self.assertEqual(
+            AlignmentWindowCoverage.select_overlap(
+                words, 5843.32, 60, 5, 0.5,
+            ),
+            12.0,
+        )
+
+    def test_uncoverable_word_fails_before_measured_timing_is_claimed(self):
+        with self.assertRaisesRegex(ValueError, "No complete-context acoustic window for word 9"):
+            AlignmentWindowCoverage.select_overlap(
+                [(9, 20, 80)], 120, 60, 5, 0.5,
+            )
+
     def test_real_model_overlap_candidates_repair_both_retained_seams(self):
         fixture = json.loads((Path(__file__).parent / "test_fixtures" /
                               "alignment-window-seams.json").read_text(encoding="utf-8-sig"))

@@ -41,7 +41,9 @@ import numpy as np
 import torch
 import torchaudio
 from model_load_lock import serialized_model_load
-from alignment_window_stitcher import AlignmentWindowCandidate, AlignmentWindowStitcher
+from alignment_window_stitcher import (
+    AlignmentWindowCandidate, AlignmentWindowCoverage, AlignmentWindowStitcher,
+)
 from torchaudio.pipelines import WAV2VEC2_ASR_LARGE_LV60K_960H as BUNDLE
 
 
@@ -258,6 +260,29 @@ class Wav2Vec2Aligner:
         aligned: List[Optional[dict]] = [None] * len(words)
         candidates: List[List[AlignmentWindowCandidate]] = [[] for _ in words]
 
+        # Long native Whisper words can straddle both 0.5s safety margins or
+        # exceed the nominal 5s overlap. The old fixed grid left such words
+        # without *any* writable acoustic window, causing the final stitch to
+        # discard timing authority for an otherwise recognized long source.
+        # Widen only when the actual word geometry requires it, and refuse an
+        # uncovered word before spending GPU time. Non-vocabulary tokens remain
+        # explicit fallbacks; they cannot be made acoustic candidates here.
+        alignable = [
+            (ordinal, word["start"], word["end"])
+            for ordinal, word in enumerate(words)
+            if self.normalize_word(word["word"])
+        ]
+        if alignable:
+            selected_overlap = AlignmentWindowCoverage.select_overlap(
+                alignable, total_dur, chunk_sec, overlap_sec, EDGE_MARGIN_SEC,
+            )
+            if selected_overlap != overlap_sec:
+                print(
+                    f"[Wav2Vec2Aligner] complete-context overlap "
+                    f"{overlap_sec:g}s -> {selected_overlap:g}s",
+                    flush=True,
+                )
+            overlap_sec = selected_overlap
         chunk_step = chunk_sec - overlap_sec
         if chunk_step <= 0:
             raise ValueError(f"overlap_sec ({overlap_sec}) must be < chunk_sec ({chunk_sec})")

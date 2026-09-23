@@ -25,6 +25,95 @@ class AlignmentWindowCandidate:
         )
 
 
+class AlignmentWindowCoverage:
+    """Choose bounded overlap before GPU work so each word has a writable window."""
+
+    MAX_OVERLAP_SEC = 20
+
+    @classmethod
+    def select_overlap(
+        cls,
+        words: list[tuple[int, float, float]],
+        total_duration: float,
+        chunk_sec: float,
+        minimum_overlap_sec: float,
+        edge_margin_sec: float,
+    ) -> float:
+        if (
+            not words
+            or not all(math.isfinite(value) for value in
+                       (total_duration, chunk_sec, minimum_overlap_sec, edge_margin_sec))
+            or total_duration <= 0
+            or chunk_sec <= 1
+            or minimum_overlap_sec < 0
+            or minimum_overlap_sec > cls.MAX_OVERLAP_SEC
+            or edge_margin_sec < 0
+            or minimum_overlap_sec >= chunk_sec
+        ):
+            raise ValueError("Invalid acoustic window coverage request")
+        for ordinal, start, end in words:
+            if (
+                not isinstance(ordinal, int) or isinstance(ordinal, bool)
+                or ordinal < 0
+                or isinstance(start, bool) or not isinstance(start, (int, float))
+                or isinstance(end, bool) or not isinstance(end, (int, float))
+                or not math.isfinite(start) or not math.isfinite(end)
+                or start < 0 or end < start
+            ):
+                raise ValueError("Invalid native word geometry for acoustic coverage")
+
+        longest_sec = max(end - start for _, start, end in words)
+        first_overlap = max(
+            math.ceil(minimum_overlap_sec),
+            math.ceil(longest_sec + 2 * edge_margin_sec),
+        )
+        upper_overlap = min(cls.MAX_OVERLAP_SEC, math.ceil(chunk_sec) - 1)
+        for overlap in range(min(first_overlap, upper_overlap), upper_overlap + 1):
+            missing = cls.first_uncovered_word(
+                words, total_duration, chunk_sec, float(overlap), edge_margin_sec,
+            )
+            if missing is None:
+                return float(overlap)
+        missing = cls.first_uncovered_word(
+            words, total_duration, chunk_sec,
+            float(min(upper_overlap, max(math.ceil(minimum_overlap_sec), 0))),
+            edge_margin_sec,
+        )
+        raise ValueError(
+            f"No complete-context acoustic window for word {missing}"
+        )
+
+    @staticmethod
+    def first_uncovered_word(
+        words: list[tuple[int, float, float]],
+        total_duration: float,
+        chunk_sec: float,
+        overlap_sec: float,
+        edge_margin_sec: float,
+    ) -> Optional[int]:
+        step_sec = chunk_sec - overlap_sec
+        if step_sec <= 0:
+            raise ValueError("Acoustic window overlap must be shorter than its chunk")
+        windows = []
+        window_start = 0.0
+        while window_start < total_duration:
+            window_end = min(window_start + chunk_sec, total_duration)
+            if window_end - window_start >= 1.0:
+                windows.append((window_start, window_end,
+                                window_end >= total_duration - 1e-6))
+            window_start += step_sec
+        for ordinal, start, end in words:
+            if not any(
+                window_start <= start < window_end
+                and (last or start < window_end - edge_margin_sec)
+                and (last or end <= window_end - edge_margin_sec)
+                and (window_start == 0 or start >= window_start + edge_margin_sec)
+                for window_start, window_end, last in windows
+            ):
+                return ordinal
+        return None
+
+
 class AlignmentWindowStitcher:
     """Maximum-context path through actual per-word alignment candidates."""
 
