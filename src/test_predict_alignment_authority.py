@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from aligner import Wav2Vec2Aligner
+from german_aligner import GermanWav2Vec2Aligner
 from predict import Predictor
 
 
@@ -79,10 +80,10 @@ class PredictorAlignmentAuthorityTest(unittest.TestCase):
         return predictor
 
     def test_unsupported_language_preserves_whisper_geometry(self):
-        words = [_word(" über", 0.1, 0.4)]
+        words = [_word(" bonjour", 0.1, 0.4)]
         aligner = _FakeAligner(result=[])
         predictor = self._predictor(
-            language="de",
+            language="fr",
             words=words,
             aligner=aligner,
         )
@@ -98,7 +99,7 @@ class PredictorAlignmentAuthorityTest(unittest.TestCase):
             result["word_timestamps"],
             [
                 {
-                    "word": " über",
+                    "word": " bonjour",
                     "start": 0.1,
                     "end": 0.4,
                     "probability": 0.95,
@@ -110,7 +111,7 @@ class PredictorAlignmentAuthorityTest(unittest.TestCase):
             result["alignment"]["status"],
             "UNSUPPORTED_LANGUAGE",
         )
-        self.assertEqual(result["alignment"]["detected_language"], "de")
+        self.assertEqual(result["alignment"]["detected_language"], "fr")
         self.assertEqual(result["alignment"]["aligned_words"], 0)
         self.assertEqual(result["alignment"]["fallback_words"], 1)
         self.assertFalse(result["alignment"]["per_word_authority"])
@@ -177,6 +178,47 @@ class PredictorAlignmentAuthorityTest(unittest.TestCase):
             result["word_timestamps"][1]["alignment_status"],
             "FALLBACK_UNALIGNED",
         )
+
+    def test_german_uses_german_acoustics_without_replacing_english_aligner(self):
+        words = [_word(" über", .1, .4)]
+        english = _FakeAligner(error=AssertionError("English model must not run"))
+        german = _FakeAligner(result=[{
+            "word": " über", "start": .12, "end": .38,
+            "onset_start": .08, "offset_end": .42,
+            "alignment_status": "ALIGNED_SUPPORTED", "alignment_authority": True,
+            "alignment_model_id": GermanWav2Vec2Aligner.model_id,
+            "alignment_language": "de",
+        }])
+        german.supports_language = GermanWav2Vec2Aligner.supports_language
+        predictor = self._predictor(language="de-DE", words=words, aligner=english)
+        predictor.german_aligner = german
+        result = predictor.predict("unused.wav", model_name="base",
+                                   word_timestamps=True, force_align=True)
+        self.assertEqual(english.setup_calls, [])
+        self.assertEqual(english.align_calls, [])
+        self.assertEqual(len(german.align_calls), 1)
+        self.assertEqual(german.align_calls[0]["language_code"], "de")
+        self.assertEqual(result["word_timestamps"][0]["word"], " über")
+        self.assertEqual(result["alignment"]["model_id"], GermanWav2Vec2Aligner.model_id)
+        self.assertEqual(result["alignment"]["supported_languages"], ["de"])
+        self.assertTrue(result["word_timestamps_aligned"])
+
+    def test_failed_german_alignment_preserves_transcription_without_english_fallback(self):
+        english = _FakeAligner(error=AssertionError("Wrong acoustic language"))
+        german = _FakeAligner(error=RuntimeError("German model unavailable"))
+        german.supports_language = GermanWav2Vec2Aligner.supports_language
+        predictor = self._predictor(language="de", words=[_word(" Straße", .1, .4)],
+                                    aligner=english)
+        predictor.german_aligner = german
+        result = predictor.predict("unused.wav", model_name="base",
+                                   word_timestamps=True, force_align=True)
+        self.assertEqual(result["word_timestamps"], [{
+            "word": " Straße", "start": .1, "end": .4, "probability": .95,
+        }])
+        self.assertEqual(result["alignment"]["status"], "FAILED")
+        self.assertFalse(result["word_timestamps_aligned"])
+        self.assertEqual(len(german.align_calls), 1)
+        self.assertEqual(english.align_calls, [])
 
     def test_alignment_failure_preserves_paid_whisper_result(self):
         words = [_word(" hello", 0.1, 0.4)]

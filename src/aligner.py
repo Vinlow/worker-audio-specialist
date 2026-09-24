@@ -65,6 +65,9 @@ MAX_META_LOAD_ATTEMPTS = 2
 class Wav2Vec2Aligner:
     """Forced alignment via wav2vec2 CTC. Lazy-loaded on first call."""
 
+    model_id = ALIGNMENT_MODEL_ID
+    supported_languages = ALIGNMENT_SUPPORTED_LANGUAGES
+
     def __init__(self):
         self.model = None
         self.labels: Optional[Tuple[str, ...]] = None
@@ -87,22 +90,21 @@ class Wav2Vec2Aligner:
                     return
                 print(
                     "[Wav2Vec2Aligner] loading "
-                    f"WAV2VEC2_ASR_LARGE_LV60K_960H on {device}...",
+                    f"{self.model_id} on {device}...",
                     flush=True,
                 )
                 try:
-                    model = self._load_hydrated_cpu_model()
+                    model, labels, sample_rate = self._load_components()
                     # Publish state only after construction and device transfer
                     # both succeed. A failed attempt must never leave a partial
                     # model visible to a concurrent or retrying job.
                     loaded_model = model.to(device).eval()
-                    labels = BUNDLE.get_labels()
                     label_to_idx = {ch: i for i, ch in enumerate(labels)}
 
                     self.model = loaded_model
                     self.device = device
                     self.labels = labels
-                    self.sample_rate = BUNDLE.sample_rate
+                    self.sample_rate = sample_rate
                     self.label_to_idx = label_to_idx
                     # Word boundary char in this model's vocab is '|'
                     self.word_separator_idx = label_to_idx.get("|", 4)
@@ -115,6 +117,9 @@ class Wav2Vec2Aligner:
                 except Exception:
                     self._clear_setup_state()
                     raise
+
+    def _load_components(self):
+        return self._load_hydrated_cpu_model(), BUNDLE.get_labels(), BUNDLE.sample_rate
 
     def _load_hydrated_cpu_model(self):
         """Load a fully materialized CPU model or fail closed.
@@ -171,15 +176,15 @@ class Wav2Vec2Aligner:
     def supports_language(cls, language_code: Optional[str]) -> bool:
         return (
             cls.normalize_language_code(language_code)
-            in ALIGNMENT_SUPPORTED_LANGUAGES
+            in cls.supported_languages
         )
 
-    @staticmethod
-    def _fallback_word(word: dict, reason: str) -> dict:
+    @classmethod
+    def _fallback_word(cls, word: dict, reason: str) -> dict:
         fallback = dict(word)
         fallback["alignment_status"] = "FALLBACK_UNALIGNED"
         fallback["alignment_authority"] = False
-        fallback["alignment_model_id"] = ALIGNMENT_MODEL_ID
+        fallback["alignment_model_id"] = cls.model_id
         fallback["alignment_reason"] = reason
         return fallback
 
@@ -235,9 +240,9 @@ class Wav2Vec2Aligner:
         a measurement with complete context from a neighboring window.
         """
         normalized_language = self.normalize_language_code(language_code)
-        if normalized_language not in ALIGNMENT_SUPPORTED_LANGUAGES:
+        if normalized_language not in self.supported_languages:
             raise ValueError(
-                f"{ALIGNMENT_MODEL_ID} does not support alignment language "
+                f"{self.model_id} does not support alignment language "
                 f"{language_code!r}"
             )
         if not words:
@@ -461,7 +466,7 @@ class Wav2Vec2Aligner:
                 new_word["offset_end"] = float(abs_offset)
                 new_word["alignment_status"] = "ALIGNED_SUPPORTED"
                 new_word["alignment_authority"] = True
-                new_word["alignment_model_id"] = ALIGNMENT_MODEL_ID
+                new_word["alignment_model_id"] = self.model_id
                 new_word["alignment_language"] = normalized_language
                 word_scores = [float(span.score) for span in spans_for_word]
                 new_word["alignment_score_mean"] = float(

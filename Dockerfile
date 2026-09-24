@@ -104,6 +104,12 @@ RUN --mount=type=secret,id=hf_token,required=false \
     fi
 RUN rm /fetch_models.py
 
+# Keep the new language artifact after existing model layers so adding German
+# does not invalidate every Whisper/CLAP/diarizer download and construction.
+COPY src/german_alignment_model.py /german_alignment_model.py
+COPY builder/fetch_german_alignment.py /fetch_german_alignment.py
+RUN python /fetch_german_alignment.py && rm /fetch_german_alignment.py
+
 # Retain the exact build contract and model attribution in the distributed
 # image. These tiny compliance/audit layers deliberately follow every model
 # layer so documentation changes never invalidate multi-gigabyte downloads.

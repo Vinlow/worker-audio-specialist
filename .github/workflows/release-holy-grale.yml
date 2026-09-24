@@ -136,6 +136,16 @@ jobs:
           --entrypoint python
           "$IMAGE_TAG"
           -m unittest -v test_clap_real_model
+      - name: Run the baked English and German acoustic models fully offline
+        run: >-
+          docker run --rm --network none
+          --cpus 16
+          --memory 64g
+          --memory-swap 72g
+          -e AUDIO_WORKER_REAL_MODEL_SMOKE=1
+          --entrypoint python
+          "$IMAGE_TAG"
+          -m unittest -v test_german_alignment_real_model
       - name: Publish only after every image gate passes
         id: publish
         run: |

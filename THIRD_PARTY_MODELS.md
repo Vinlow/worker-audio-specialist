@@ -95,7 +95,19 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Apache-2.0 artifact
+## Apache-2.0 artifacts
+
+### German wav2vec 2.0 alignment checkpoint
+
+`jonatasgrosman/wav2vec2-large-xlsr-53-german`, by Jonatas Grosman, fine-tuned
+from Facebook AI's XLSR-53 on Common Voice 6.1 German.
+
+- Revision: `4b8a02957378d0f2da2ef74091156b032c485a89`
+- Source and license declaration: https://huggingface.co/jonatasgrosman/wav2vec2-large-xlsr-53-german/tree/4b8a02957378d0f2da2ef74091156b032c485a89
+- License: Apache License 2.0
+- Changes: no model-file changes; packaged for offline inference. The adapter
+  applies the upstream feature extractor and projects German spelling only for
+  CTC targets; the source transcript remains unchanged.
 
 ### LAION CLAP
 

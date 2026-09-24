@@ -77,6 +77,7 @@ Pre-downloaded at exact reviewed revisions into the image (every accepted Whispe
 - **Whisper turbo** — hub CI test
 - **CLAP** (`laion/larger_clap_music_and_speech`) — audio-text similarity
 - **Wav2vec2** (`WAV2VEC2_ASR_LARGE_LV60K_960H`) — CTC forced alignment (English)
+- **German wav2vec2** (`jonatasgrosman/wav2vec2-large-xlsr-53-german`, pinned revision `4b8a02957378d0f2da2ef74091156b032c485a89`) — German CTC alignment through the same window/stitcher path. Lazy-loaded for classic Whisper German results; script-supplied and Parakeet alignment remain English-only.
 - **Parakeet TDT 0.6B v3**
   (`nvidia/parakeet-tdt-0.6b-v3@7c35754d…`) — opt-in multilingual ASR probe
 - **SaT 3L small**
@@ -106,7 +107,7 @@ never trigger a mutable Hugging Face download.
 | `translate` | bool | Translate to English. Default: `false` |
 | `language` | str | Language code, or `null` for auto-detection. Default: `null` |
 | `word_timestamps` | bool | Include per-word timestamps and probability. Default: `false` |
-| `force_align` | bool | Re-time supported-language `word_timestamps` via wav2vec2 CTC alignment and add per-word `onset_start`/`offset_end` evidence. Requires `word_timestamps: true`. The current model supports English only; unsupported languages fail soft with an explicit status. Default: `false` |
+| `force_align` | bool | Re-time supported-language `word_timestamps` via language-specific wav2vec2 CTC alignment and add per-word `onset_start`/`offset_end` evidence. Requires `word_timestamps: true`. Classic Whisper selects English or German acoustics from detected language; other languages fail soft with an explicit status. Default: `false` |
 | `alignment_segments` | array | Align caller-supplied English segment text to the exact audio without another ASR pass. Each `{start,end,text}` bound is routing geometry only; accepted word timing comes from wav2vec2. Requires `word_timestamps:true`, `force_align:true`, and cannot be combined with span streaming, CLAP, SaT, translation, or diarization. |
 | `diarize` | bool | Experimental speaker diarization sidecar. Requires `word_timestamps: true` for word attribution. Default: `false` |
 | `diarize_min_speakers` | int | Optional minimum speaker hint from 0–64. `0` means automatic. |
@@ -247,11 +248,21 @@ authority flags remain false.
 With `force_align: true`, supported-language words are re-timed against the
 audio and each aligned word additionally carries NP-SBV2 silence-run
 boundaries. The render layer can cut anywhere in `[onset_start, start]` or
-`[end, offset_end]` without slicing mid-phoneme. The current
-`WAV2VEC2_ASR_LARGE_LV60K_960H` model is English-only. Unsupported languages
+`[end, offset_end]` without slicing mid-phoneme. English keeps the existing
+`WAV2VEC2_ASR_LARGE_LV60K_960H` model; German uses the pinned XLSR-53 German
+model and its own lowercase/umlaut vocabulary and upstream feature extractor.
+The shared CTC path still uses blank index zero, 16 kHz mono audio, overlapping
+windows and source-bounded stitching. German `ß` is projected to `ss` only in
+CTC targets; emitted word text remains the original transcript. Unknown letters
+or numbers leave the whole word explicitly unaligned. Unsupported languages
 keep their exact Whisper geometry and return
 `alignment.status: "UNSUPPORTED_LANGUAGE"` rather than a false alignment
 claim.
+
+German implementation is a release candidate, not a deployed or quality-qualified
+claim. The image gate checks both real acoustic models offline; qualification
+also requires German creator-speech canaries, English regression, returned model
+identity, measured boundaries and settled GPU cost on the exact test image.
 
 Every attempted alignment returns a typed top-level summary. Authority remains
 per word because numbers, symbols, edge words, or failed CTC chunks may retain

@@ -44,6 +44,7 @@ from aligner import (
     Wav2Vec2Aligner,
 )
 from hf_auth import normalize_hf_token_env
+from german_aligner import GermanWav2Vec2Aligner
 from model_manifest import WHISPER_MODEL_REVISIONS
 from model_load_lock import serialized_model_load
 from parakeet_transcriber import ParakeetTranscriber
@@ -97,6 +98,7 @@ class Predictor:
         )  # Lock for thread-safe model loading/unloading
         self.clap_scorer = ClapScorer()
         self.aligner = Wav2Vec2Aligner()  # lazy-loaded on first force_align call
+        self.german_aligner = GermanWav2Vec2Aligner()
         self.diarizer = SpeakerDiarizer()  # lazy-loaded on first diarize call
         self.parakeet_transcriber = ParakeetTranscriber()
         self.sat_punctuator = SaTPunctuator()
@@ -481,13 +483,21 @@ class Predictor:
                     detected_alignment_language = (
                         self.aligner.normalize_language_code(info.language)
                     )
+                    active_aligner = (self.german_aligner
+                                      if detected_alignment_language == "de"
+                                      else self.aligner)
+                    alignment_model_id = (GermanWav2Vec2Aligner.model_id
+                                          if detected_alignment_language == "de"
+                                          else ALIGNMENT_MODEL_ID)
                     alignment_evidence = {
                         "schema_version": ALIGNMENT_SCHEMA_VERSION,
                         "status": "UNVERIFIED",
-                        "model_id": ALIGNMENT_MODEL_ID,
+                        "model_id": alignment_model_id,
                         "detected_language": detected_alignment_language,
                         "supported_languages": sorted(
-                            ALIGNMENT_SUPPORTED_LANGUAGES
+                            GermanWav2Vec2Aligner.supported_languages
+                            if detected_alignment_language == "de"
+                            else ALIGNMENT_SUPPORTED_LANGUAGES
                         ),
                         "total_words": len(word_timestamps_list),
                         "aligned_words": 0,
@@ -497,12 +507,12 @@ class Predictor:
                         "transcript_geometry_mutated": False,
                     }
 
-                    if not self.aligner.supports_language(
+                    if not active_aligner.supports_language(
                         detected_alignment_language
                     ):
                         print(
                             "[Predictor] Skipping wav2vec2 forced alignment: "
-                            f"{ALIGNMENT_MODEL_ID} does not support detected "
+                            f"{alignment_model_id} does not support detected "
                             f"language {detected_alignment_language!r}",
                             flush=True,
                         )
@@ -521,8 +531,8 @@ class Predictor:
                             device = (
                                 "cuda" if rp_cuda.is_available() else "cpu"
                             )
-                            self.aligner.setup(device=device)
-                            aligned_list = self.aligner.align(
+                            active_aligner.setup(device=device)
+                            aligned_list = active_aligner.align(
                                 str(audio),
                                 word_timestamps_list,
                                 language_code=detected_alignment_language,
