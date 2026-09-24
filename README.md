@@ -39,6 +39,13 @@ exists, alignment fails explicitly and the predictor preserves native Whisper
 output with failed alignment status. Non-vocabulary tokens retain their
 explicit non-authoritative fallback marker and original text/timing.
 
+Quiet seams can leave neighboring words in separate alignment windows even
+when each word individually has enough context. The window planner adds a
+centered observation containing both words when no existing window does so.
+These extra windows are bounded to at most one additional source-duration of
+audio, and the same strict stitcher selects from the measured candidates.
+This does not widen every overlap or clamp a conflicting silence envelope.
+
 CTC token spans use exclusive end-frame boundaries. Acoustic envelopes extend
 only through immediately adjacent blank frames, including at EOF; they never
 add a frame beyond the audio or cross the next non-blank token. Regression

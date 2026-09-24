@@ -288,22 +288,14 @@ class Wav2Vec2Aligner:
                     flush=True,
                 )
             overlap_sec = selected_overlap
-        chunk_step = chunk_sec - overlap_sec
-        if chunk_step <= 0:
-            raise ValueError(f"overlap_sec ({overlap_sec}) must be < chunk_sec ({chunk_sec})")
-
-        chunk_idx = 0
-        chunk_start_sec = 0.0
+        windows = AlignmentWindowCoverage.plan_windows(
+            alignable, total_dur, chunk_sec, overlap_sec, EDGE_MARGIN_SEC,
+        )
         chunks_processed = 0
         words_aligned = 0
         words_unalignable = 0
 
-        while chunk_start_sec < total_dur:
-            chunk_end_sec = min(chunk_start_sec + chunk_sec, total_dur)
-            chunk_dur = chunk_end_sec - chunk_start_sec
-            if chunk_dur < 1.0:
-                break  # Skip tiny tail chunks
-            is_last_chunk = chunk_end_sec >= total_dur - 1e-6
+        for chunk_idx, (chunk_start_sec, chunk_end_sec, is_last_chunk) in enumerate(windows):
 
             # Every word STARTING in this chunk's window goes into the CTC
             # target sequence — INCLUDING words measured by the previous
@@ -328,8 +320,6 @@ class Wav2Vec2Aligner:
             }
 
             if not writable:
-                chunk_start_sec += chunk_step
-                chunk_idx += 1
                 continue
 
             # Build flat list of CHAR tokens (no word separators — wav2vec2 model
@@ -360,8 +350,6 @@ class Wav2Vec2Aligner:
                 word_char_counts.append((n_chars_added, words_idx, w["word"]))
 
             if not writable or not word_char_counts:
-                chunk_start_sec += chunk_step
-                chunk_idx += 1
                 continue
 
             # Forward pass — get CTC emissions. Done AFTER the word selection so
@@ -388,8 +376,6 @@ class Wav2Vec2Aligner:
                 print(f"[Wav2Vec2Aligner] chunk {chunk_idx} forced_align failed: {e}", flush=True)
                 # A neighboring window may still supply complete candidates.
                 # Missing coverage fails the final stitch explicitly.
-                chunk_start_sec += chunk_step
-                chunk_idx += 1
                 continue
 
             # Collapse repeats/blanks into per-token spans. Each TokenSpan has
@@ -410,8 +396,6 @@ class Wav2Vec2Aligner:
                     f"vs targets={len(tokens)} — sequences out of sync, falling back",
                     flush=True,
                 )
-                chunk_start_sec += chunk_step
-                chunk_idx += 1
                 continue
 
             # Per-frame token assignments (includes blanks). Used to find
@@ -478,8 +462,6 @@ class Wav2Vec2Aligner:
                 ))
 
             chunks_processed += 1
-            chunk_start_sec += chunk_step
-            chunk_idx += 1
 
         # Choose complete, ordered geometry across all windows. If no coherent
         # path exists, fail alignment explicitly; never demote an inconsistent

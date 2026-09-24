@@ -1,0 +1,279 @@
+{
+  "schemaVersion": "alignment-german-quiet-seam-v1",
+  "sourceStart": 1325,
+  "audioSha256": "41ab4c382d9ab55123c4c5a6407674ce9a01319f3685b401afa91277c5bfec3c",
+  "modelId": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+  "runtime": "torch/torchaudio 2.7.1 CPU; UTF-8 exact provider words",
+  "sourceIndices": [
+    2734,
+    2735,
+    2736,
+    2737
+  ],
+  "baseline": [
+    [
+      {
+        "word": {
+          "end": 44.25475158386129,
+          "probability": 0.99951171875,
+          "start": 43.734578192730915,
+          "word": " wunderschöne",
+          "sourceIndex": 2734,
+          "onset_start": 43.674558186062015,
+          "offset_end": 44.67489163054351,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -0.007927575607178975,
+          "alignment_score_min": -0.08809622377157211
+        },
+        "window_index": 0,
+        "window_start": 0.0,
+        "window_end": 60.0
+      }
+    ],
+    [
+      {
+        "word": {
+          "end": 45.09503167722574,
+          "probability": 0.98486328125,
+          "start": 44.67489163054351,
+          "word": " Umgebung.",
+          "sourceIndex": 2735,
+          "onset_start": 44.25475158386129,
+          "offset_end": 60.0,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -0.0008951133568189107,
+          "alignment_score_min": -0.002919699065387249
+        },
+        "window_index": 0,
+        "window_start": 0.0,
+        "window_end": 60.0
+      }
+    ],
+    [
+      {
+        "word": {
+          "end": 57.361453817939314,
+          "probability": 0.015594482421875,
+          "start": 56.841280426808936,
+          "word": " Ja",
+          "sourceIndex": 2736,
+          "onset_start": 53.0,
+          "offset_end": 57.70156718906302,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -7.17010682808268,
+          "alignment_score_min": -14.340190887451172
+        },
+        "window_index": 1,
+        "window_start": 53.0,
+        "window_end": 113.0
+      }
+    ],
+    [
+      {
+        "word": {
+          "end": 64.34378126042014,
+          "probability": 0.286865234375,
+          "start": 57.70156718906302,
+          "word": " das",
+          "sourceIndex": 2737,
+          "onset_start": 57.361453817939314,
+          "offset_end": 64.60386795598532,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -1.7981127227346103,
+          "alignment_score_min": -3.8344900608062744
+        },
+        "window_index": 1,
+        "window_start": 53.0,
+        "window_end": 113.0
+      }
+    ]
+  ],
+  "jointContext": [
+    [
+      {
+        "word": {
+          "end": 44.25475158386129,
+          "probability": 0.99951171875,
+          "start": 43.734578192730915,
+          "word": " wunderschöne",
+          "sourceIndex": 2734,
+          "onset_start": 43.674558186062015,
+          "offset_end": 44.67489163054351,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -0.007927575607178975,
+          "alignment_score_min": -0.08809622377157211
+        },
+        "window_index": 0,
+        "window_start": 0.0,
+        "window_end": 60.0
+      },
+      {
+        "word": {
+          "end": 44.24704234744915,
+          "probability": 0.99951171875,
+          "start": 43.72686895631878,
+          "word": " wunderschöne",
+          "sourceIndex": 2734,
+          "onset_start": 43.68685561853952,
+          "offset_end": 44.66718239413138,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -0.025501850017728128,
+          "alignment_score_min": -0.2421819418668747
+        },
+        "window_index": 1,
+        "window_start": 23.120000000000005,
+        "window_end": 83.12
+      }
+    ],
+    [
+      {
+        "word": {
+          "end": 45.09503167722574,
+          "probability": 0.98486328125,
+          "start": 44.67489163054351,
+          "word": " Umgebung.",
+          "sourceIndex": 2735,
+          "onset_start": 44.25475158386129,
+          "offset_end": 60.0,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -0.0008951133568189107,
+          "alignment_score_min": -0.002919699065387249
+        },
+        "window_index": 0,
+        "window_start": 0.0,
+        "window_end": 60.0
+      },
+      {
+        "word": {
+          "end": 45.08732244081361,
+          "probability": 0.98486328125,
+          "start": 44.66718239413138,
+          "word": " Umgebung.",
+          "sourceIndex": 2735,
+          "onset_start": 44.24704234744915,
+          "offset_end": 52.82990330110037,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -0.026738170480257395,
+          "alignment_score_min": -0.2119714319705963
+        },
+        "window_index": 1,
+        "window_start": 23.120000000000005,
+        "window_end": 83.12
+      }
+    ],
+    [
+      {
+        "word": {
+          "end": 52.86991663887963,
+          "probability": 0.015594482421875,
+          "start": 52.82990330110037,
+          "word": " Ja",
+          "sourceIndex": 2736,
+          "onset_start": 45.08732244081361,
+          "offset_end": 52.92993664554852,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -0.02566613908857107,
+          "alignment_score_min": -0.030176041647791862
+        },
+        "window_index": 1,
+        "window_start": 23.120000000000005,
+        "window_end": 83.12
+      },
+      {
+        "word": {
+          "end": 57.361453817939314,
+          "probability": 0.015594482421875,
+          "start": 56.841280426808936,
+          "word": " Ja",
+          "sourceIndex": 2736,
+          "onset_start": 53.0,
+          "offset_end": 57.70156718906302,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -7.17010682808268,
+          "alignment_score_min": -14.340190887451172
+        },
+        "window_index": 2,
+        "window_start": 53.0,
+        "window_end": 113.0
+      }
+    ],
+    [
+      {
+        "word": {
+          "end": 56.87125041680561,
+          "probability": 0.286865234375,
+          "start": 52.92993664554852,
+          "word": " das",
+          "sourceIndex": 2737,
+          "onset_start": 52.86991663887963,
+          "offset_end": 57.43143714571524,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -3.2069838605069285,
+          "alignment_score_min": -9.600421905517578
+        },
+        "window_index": 1,
+        "window_start": 23.120000000000005,
+        "window_end": 83.12
+      },
+      {
+        "word": {
+          "end": 64.34378126042014,
+          "probability": 0.286865234375,
+          "start": 57.70156718906302,
+          "word": " das",
+          "sourceIndex": 2737,
+          "onset_start": 57.361453817939314,
+          "offset_end": 64.60386795598532,
+          "alignment_status": "ALIGNED_SUPPORTED",
+          "alignment_authority": true,
+          "alignment_model_id": "jonatasgrosman/wav2vec2-large-xlsr-53-german@4b8a02957378d0f2da2ef74091156b032c485a89",
+          "alignment_language": "de",
+          "alignment_score_mean": -1.7981127227346103,
+          "alignment_score_min": -3.8344900608062744
+        },
+        "window_index": 2,
+        "window_start": 53.0,
+        "window_end": 113.0
+      }
+    ]
+  ],
+  "expectedChoice": [
+    1,
+    1,
+    0,
+    0
+  ]
+}

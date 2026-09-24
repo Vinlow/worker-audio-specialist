@@ -31,6 +31,73 @@ class AlignmentWindowCoverage:
     MAX_OVERLAP_SEC = 20
 
     @classmethod
+    def plan_windows(
+        cls, words: list[tuple[int, float, float]], total_duration: float,
+        chunk_sec: float, overlap_sec: float, edge_margin_sec: float,
+    ) -> list[tuple[float, float, bool]]:
+        """Give adjacent alignable words joint context across quiet seams.
+
+        Independent windows can extend the previous word's blank envelope past
+        speech measured by the next window. Add a centered acoustic observation
+        of both words, never alter either measured envelope to force a join.
+        At most one additional source pass is permitted before inference starts.
+        """
+        if words:
+            overlap_sec = cls.select_overlap(
+                words, total_duration, chunk_sec, overlap_sec, edge_margin_sec,
+            )
+        windows = cls._regular_windows(total_duration, chunk_sec, overlap_sec)
+        extra_seconds = 0.0
+        for left, right in zip(words, words[1:]):
+            start, end = left[1], right[2]
+            if any(cls._contains_pair(window, start, end, edge_margin_sec)
+                   for window in windows):
+                continue
+            # A gap longer than a complete window cannot have joint context;
+            # its separated measured envelopes still face the strict stitcher.
+            if end - start > chunk_sec - 2 * edge_margin_sec:
+                continue
+            window_start = max(0.0, min(
+                (start + end - chunk_sec) / 2, max(0.0, total_duration - chunk_sec),
+            ))
+            window_end = min(window_start + chunk_sec, total_duration)
+            window = (window_start, window_end, window_end >= total_duration - 1e-6)
+            if not cls._contains_pair(window, start, end, edge_margin_sec):
+                continue
+            extra_seconds += window_end - window_start
+            if extra_seconds > total_duration:
+                raise ValueError("Acoustic joint-context windows exceed one extra source pass")
+            windows.append(window)
+        return sorted(windows, key=lambda window: (window[0], window[1]))
+
+    @staticmethod
+    def _contains_pair(window: tuple[float, float, bool], start: float, end: float,
+                       margin: float) -> bool:
+        window_start, window_end, last = window
+        return (window_start <= start < window_end and end <= window_end
+                and (window_start == 0 or start >= window_start + margin)
+                and (last or end <= window_end - margin))
+
+    @staticmethod
+    def _regular_windows(total_duration: float, chunk_sec: float,
+                         overlap_sec: float) -> list[tuple[float, float, bool]]:
+        if (not all(math.isfinite(value) for value in (total_duration, chunk_sec, overlap_sec))
+                or total_duration <= 0 or chunk_sec <= 1 or overlap_sec < 0):
+            raise ValueError("Invalid acoustic window request")
+        step_sec = chunk_sec - overlap_sec
+        if step_sec <= 0:
+            raise ValueError("Acoustic window overlap must be shorter than its chunk")
+        windows = []
+        window_start = 0.0
+        while window_start < total_duration:
+            window_end = min(window_start + chunk_sec, total_duration)
+            if window_end - window_start >= 1.0:
+                windows.append((window_start, window_end,
+                                window_end >= total_duration - 1e-6))
+            window_start += step_sec
+        return windows
+
+    @classmethod
     def select_overlap(
         cls,
         words: list[tuple[int, float, float]],
@@ -91,17 +158,9 @@ class AlignmentWindowCoverage:
         overlap_sec: float,
         edge_margin_sec: float,
     ) -> Optional[int]:
-        step_sec = chunk_sec - overlap_sec
-        if step_sec <= 0:
-            raise ValueError("Acoustic window overlap must be shorter than its chunk")
-        windows = []
-        window_start = 0.0
-        while window_start < total_duration:
-            window_end = min(window_start + chunk_sec, total_duration)
-            if window_end - window_start >= 1.0:
-                windows.append((window_start, window_end,
-                                window_end >= total_duration - 1e-6))
-            window_start += step_sec
+        windows = AlignmentWindowCoverage._regular_windows(
+            total_duration, chunk_sec, overlap_sec,
+        )
         for ordinal, start, end in words:
             if not any(
                 window_start <= start < window_end

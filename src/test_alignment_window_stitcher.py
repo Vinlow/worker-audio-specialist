@@ -18,6 +18,52 @@ def candidate(text, start, end, onset, offset, window=0, bounds=(0, 60)):
 
 
 class AlignmentWindowStitcherTest(unittest.TestCase):
+    def test_measured_german_quiet_seam_requires_joint_context(self):
+        fixture = json.loads((Path(__file__).parent / 'test_fixtures' /
+                              'alignment-german-quiet-seam.json').read_text(encoding='utf8'))
+        baseline = [[AlignmentWindowCandidate(**item) for item in row]
+                    for row in fixture['baseline']]
+        with self.assertRaisesRegex(ValueError, 'No coherent acoustic window join at word 2'):
+            AlignmentWindowStitcher.stitch(baseline, [None] * len(baseline))
+        choices = [[AlignmentWindowCandidate(**item) for item in row]
+                   for row in fixture['jointContext']]
+        before = copy.deepcopy(choices)
+        result = AlignmentWindowStitcher.stitch(choices, [None] * len(choices))
+        self.assertEqual(result, [row[index].word for row, index in
+                                  zip(choices, fixture['expectedChoice'])])
+        self.assertEqual(choices, before)
+        self.assertEqual([word['word'] for word in result],
+                         [row[0].word['word'] for row in baseline])
+
+    def test_quiet_minecraft_seam_gets_joint_context_without_global_widening(self):
+        words = [(2735, 1369.14, 1370.04), (2736, 1386.58, 1387.1)]
+        original = AlignmentWindowCoverage._regular_windows(1603.833333, 60, 7)
+        planned = AlignmentWindowCoverage.plan_windows(words, 1603.833333, 60, 7, 0.5)
+        added = [window for window in planned if window not in original]
+        self.assertEqual(len(added), 1)
+        self.assertAlmostEqual(added[0][0], 1348.12)
+        self.assertAlmostEqual(added[0][1], 1408.12)
+        self.assertTrue(all(window in planned for window in original))
+        self.assertTrue(AlignmentWindowCoverage._contains_pair(added[0], 1369.14, 1387.1, 0.5))
+        self.assertEqual(planned, sorted(planned))
+
+    def test_joint_context_does_not_add_work_for_covered_speech_or_long_silence(self):
+        for words in ([(0, 10, 11), (1, 12, 13)],
+                      [(0, 10, 11), (1, 100, 101)]):
+            self.assertEqual(
+                AlignmentWindowCoverage.plan_windows(words, 120, 60, 5, 0.5),
+                AlignmentWindowCoverage._regular_windows(120, 60, 5),
+            )
+
+    def test_joint_context_can_reuse_a_bridge_for_multiple_neighboring_words(self):
+        words = [(0, 44, 45), (1, 61, 62), (2, 64, 65)]
+        planned = AlignmentWindowCoverage.plan_windows(words, 113, 60, 7, 0.5)
+        original = AlignmentWindowCoverage._regular_windows(113, 60, 7)
+        self.assertEqual(len(planned), len(original) + 1)
+        for left, right in zip(words, words[1:]):
+            self.assertTrue(any(AlignmentWindowCoverage._contains_pair(
+                window, left[1], right[2], 0.5) for window in planned))
+
     def test_overlap_covers_long_native_words_before_gpu_work(self):
         # Source-backed native timing from the 97-minute Minecraft regression.
         words = [(4490, 1980.32, 1984.56), (6698, 3132.20, 3143.12)]
